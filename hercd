@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+from typing import Dict, List, Optional, Union
+import random
+random.seed(0)
+
+F = Union[str, int, 'C']
+
+class C:
+    left: F
+    right: F
+    def __init__(self, left: F, right: F):
+        assert left != 0 and right != 0
+        self.left = left
+        self.right = right
+
+    def __eq__(self, other: F):
+        return isinstance(other, C) and self.left == other.left and self.right == other.right
+
+    def __repr__(self):
+        return f'C{self.left}{self.right}'
+
+def neg(f: F) -> F:
+    if isinstance(f, str):
+        return f
+    elif isinstance(f, int):
+        return -f
+    else:
+        return C(neg(f.left), neg(f.right))
+
+def apply(subst: Dict[int, F], target: F) -> F:
+    if isinstance(target, str):
+        return target
+    elif isinstance(target, int):
+        if target in subst:
+            return apply(subst, subst[target])
+        else:
+            return target
+    else:
+        return C(apply(subst, target.left), apply(subst, target.right))
+
+def rename(renaming: Dict[int, int], target: F) -> F:
+    if isinstance(target, str):
+        return target
+    elif isinstance(target, int):
+        if target in renaming:
+            return renaming[target]
+        else:
+            fresh = len(renaming) + 1
+            renaming[target] = fresh
+            return fresh
+    else:
+        return C(rename(renaming, target.left), rename(renaming, target.right))
+
+def unify(subst: Dict[int, F], left: F, right: F) -> bool:
+    def lookup(f: F):
+        while isinstance(f, int):
+            if f in subst:
+                f = subst[f]
+            else:
+                break
+        return f
+
+    def occurs(x: int, f: F) -> bool:
+        if isinstance(f, str):
+            return False
+        if isinstance(f, int):
+            if f in subst:
+                return occurs(x, subst[f])
+            return x == f
+        return occurs(x, f.left) or occurs(x, f.right)
+
+    left = lookup(left)
+    right = lookup(right)
+    if isinstance(left, int):
+        if left == right:
+            return True
+        if occurs(left, right):
+            return False
+        subst[left] = right
+        return True
+    if isinstance(right, int):
+        return unify(subst, right, left)
+    if isinstance(left, str):
+        return left == right
+    if not isinstance(right, C):
+        return False
+    return unify(subst, left.left, right.left) and unify(subst, left.right, right.right)
+
+def match(subst: Dict[int, F], left: F, right: F) -> bool:
+    if isinstance(left, int):
+        if left in subst:
+            return subst[left] == right
+        subst[left] = right
+        return True
+    if isinstance(left, str):
+        return left == right
+    if isinstance(left, C):
+        if not isinstance(right, C):
+            return False
+        return match(subst, left.left, right.left) and match(subst, left.right, right.right)
+
+def mp(ant: F, con: F, target: F) -> Optional[F]:
+    target = neg(target)
+    subst = {}
+    if not unify(subst, ant, target):
+        return None
+    result = apply(subst, con)
+    renaming = {}
+    return rename(renaming, result)
+
+AXIOMS: List[F] = [
+    C(1,C(2,1)),
+    C(C(C(1,'f'),'f'),1),
+    C(C(1,C(2,3)),C(C(1,2),C(1,3)))
+]
+
+GOAL: F = C(C(1,2),C(C(2,3),C(1,3)))
+
+if __name__ == '__main__':
+    passive = AXIOMS
+    active = []
+    while passive:
+        given = passive[0]
+        print("activate:", given)
+        active.append(given)
+        passive = [
+            instance for instance in passive[1:]
+            if not match({}, given, instance)
+        ]
+        for partner in active:
+            for major, minor in (partner, given), (given, partner):
+                if not isinstance(major, C):
+                    continue
+                new = mp(major.left, major.right, minor)
+                if new is None:
+                    continue
+                retain = True
+                for generalisation in active:
+                    if match({}, generalisation, new):
+                        retain = False
+                        break
+                if retain:
+                    if match({}, new, GOAL):
+                        print("proof:", new)
+                        import sys
+                        sys.exit(0)
+                    passive.append(new)
