@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
-from typing import Dict, List, Optional, Union
+import json
+from queue import PriorityQueue
 import random
 random.seed(0)
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 F = Union[str, int, 'C']
 
 class C:
     left: F
     right: F
+    size: int
+    hash: int
     def __init__(self, left: F, right: F):
         assert left != 0 and right != 0
         self.left = left
         self.right = right
+        self.size = size(left) + size(right) + 1
+        self.hash = hash((left, right))
+
+    def __hash__(self):
+        return self.hash
 
     def __eq__(self, other: F):
         return isinstance(other, C) and self.left == other.left and self.right == other.right
 
     def __repr__(self):
         return f'C{self.left}{self.right}'
+
+def size(f: F) -> int:
+    if isinstance(f, C):
+        return f.size
+    return 1
 
 def neg(f: F) -> F:
     if isinstance(f, str):
@@ -27,16 +41,27 @@ def neg(f: F) -> F:
     else:
         return C(neg(f.left), neg(f.right))
 
-def apply(subst: Dict[int, F], target: F) -> F:
+def apply(subst: Dict[int, F], target: F, budget: int) -> Optional[F]:
+    if budget <= 0:
+        return None
+
     if isinstance(target, str):
         return target
     elif isinstance(target, int):
         if target in subst:
-            return apply(subst, subst[target])
+            return apply(subst, subst[target], budget)
         else:
             return target
     else:
-        return C(apply(subst, target.left), apply(subst, target.right))
+        budget -= 1
+        left = apply(subst, target.left, budget)
+        if left is None:
+            return None
+        budget -= size(left)
+        right = apply(subst, target.right, budget)
+        if right is None:
+            return None
+        return C(left, right)
 
 def rename(renaming: Dict[int, int], target: F) -> F:
     if isinstance(target, str):
@@ -51,7 +76,11 @@ def rename(renaming: Dict[int, int], target: F) -> F:
     else:
         return C(rename(renaming, target.left), rename(renaming, target.right))
 
-def unify(subst: Dict[int, F], left: F, right: F) -> bool:
+def unify(left: F, right: F) -> Optional[Dict[int, F]]:
+    subst: Dict[int, F] = {}
+    todo: Set[Tuple[F, F]] = set()
+    todo.add((left, right))
+
     def lookup(f: F):
         while isinstance(f, int):
             if f in subst:
@@ -69,44 +98,246 @@ def unify(subst: Dict[int, F], left: F, right: F) -> bool:
             return x == f
         return occurs(x, f.left) or occurs(x, f.right)
 
-    left = lookup(left)
-    right = lookup(right)
-    if isinstance(left, int):
-        if left == right:
-            return True
-        if occurs(left, right):
-            return False
-        subst[left] = right
-        return True
-    if isinstance(right, int):
-        return unify(subst, right, left)
-    if isinstance(left, str):
-        return left == right
-    if not isinstance(right, C):
-        return False
-    return unify(subst, left.left, right.left) and unify(subst, left.right, right.right)
+    while todo:
+        left, right = todo.pop()
+        left = lookup(left)
+        right = lookup(right)
+        if isinstance(left, int):
+            if left == right:
+                continue
+            if occurs(left, right):
+                return None
+            subst[left] = right
+        elif isinstance(right, int):
+            todo.add((right, left))
+        elif isinstance(left, str):
+            if left != right:
+                return None
+        elif not isinstance(right, C):
+            return None
+        else:
+            todo.add((left.left, right.left))
+            todo.add((left.right, right.right))
 
-def match(subst: Dict[int, F], left: F, right: F) -> bool:
-    if isinstance(left, int):
-        if left in subst:
-            return subst[left] == right
-        subst[left] = right
-        return True
-    if isinstance(left, str):
-        return left == right
-    if isinstance(left, C):
-        if not isinstance(right, C):
-            return False
-        return match(subst, left.left, right.left) and match(subst, left.right, right.right)
+    return subst
 
-def mp(ant: F, con: F, target: F) -> Optional[F]:
+def match(left: F, right: F) -> bool:
+    subst: Dict[int, F] = {}
+    todo: Set[Tuple[F, F]] = set()
+    todo.add((left, right))
+    while todo:
+        left, right = todo.pop()
+        if isinstance(left, int):
+            if left in subst:
+                if subst[left] != right:
+                    return False
+            else:
+                subst[left] = right
+        elif isinstance(left, str):
+            if left != right:
+                return False
+        elif not isinstance(right, C):
+            return False
+        else:
+            todo.add((left.left, right.left))
+            todo.add((left.right, right.right))
+
+    return True
+
+def mp(ant: F, con: F, target: F, size_limit: int) -> Optional[F]:
     target = neg(target)
-    subst = {}
-    if not unify(subst, ant, target):
+    subst = unify(ant, target)
+    if subst is None:
         return None
-    result = apply(subst, con)
+    result = apply(subst, con, size_limit)
+    if result is None:
+        return None
     renaming = {}
     return rename(renaming, result)
+
+class Entry:
+    formula: F
+    parents: Tuple['Entry']
+    priority: float
+    tree_size: int
+
+    def __init__(self, term: F, parents: Tuple['Entry']):
+        self.formula = term
+        self.parents = parents
+        self.priority = 0
+        self.tree_size = sum(parent.tree_size for parent in parents) + 1
+
+    def ancestors(self):
+        for parent in self.parents:
+            yield parent
+            yield from parent.ancestors()
+
+    def __lt__(self, other):
+        return self.priority < other.priority
+
+    def __repr__(self):
+        return repr(self.formula)
+
+class Graph:
+    VAR = 0
+    FUN = 1
+    C1 = 2
+    C2 = 2
+    nodes: List[int]
+    sources: List[int]
+    targets: List[int]
+    cache: Dict[F, int]
+
+    def __init__(self):
+        self.nodes = []
+        self.sources = []
+        self.targets = []
+        self.cache = {}
+
+    def dict(self) -> Dict[str, List[int]]:
+        return {
+            'nodes': self.nodes,
+            'sources': self.sources,
+            'targets': self.targets
+        }
+
+    def encode(self, f: F) -> int:
+        if f in self.cache:
+            return self.cache[f]
+
+        node = len(self.nodes)
+        if isinstance(f, int):
+            self.nodes.append(Graph.VAR)
+        elif isinstance(f, str):
+            self.nodes.append(Graph.FUN)
+        else:
+            self.nodes.append(Graph.C1)
+            self.nodes.append(Graph.C2)
+            left = self.encode(f.left)
+            right = self.encode(f.right)
+            self.sources.append(node)
+            self.targets.append(node + 1)
+            self.sources.append(node + 1)
+            self.targets.append(left)
+            self.sources.append(node)
+            self.targets.append(right)
+
+        self.cache[f] = node
+        return node
+
+def graph(f: F) -> Graph:
+    target = Graph()
+    target.encode(f)
+    return target
+
+class Environment:
+    axioms: List[F]
+    goal: F
+    goal_graph: Graph
+    active: List[Entry]
+    passive: PriorityQueue[Entry]
+    proof: Optional[Entry]
+    largest: Optional[Entry]
+    step_limit: int
+    size_limit: int
+    positive: Set[Tuple[F, F]]
+
+    def __init__(self, axioms: List[F], goal: F, step_limit: int, size_limit: int):
+        self.axioms = axioms
+        self.goal = goal
+        self.goal_graph = graph(goal)
+        self.step_limit = step_limit
+        self.size_limit = size_limit
+        self.positive = set()
+        self.negative = set()
+
+    def run(self):
+        self.active = []
+        self.passive = PriorityQueue()
+        self.proof: Optional[Entry] = None
+        self.largest: Optional[Entry] = None
+        for axiom in self.axioms:
+            self._enqueue(axiom)
+
+        step = 0
+        while self.proof is None and not self.passive.empty() and step < self.step_limit:
+            given = self._select()
+            if given is None:
+                continue
+            self._activate(given)
+            step += 1
+
+        proved = self.proof if self.proof is not None else self.largest
+        assert proved is not None
+
+        positive = {
+            entry.formula
+            for entry in proved.ancestors()
+        }
+        negative = {
+            entry.formula
+            for entry in self.active
+            if entry.formula not in positive
+        }
+        while not self.passive.empty():
+            given = self._select()
+            if given is not None:
+                negative.add(given.formula)
+
+        sample_size = min(len(positive), len(negative))
+
+        def output_sample(sample, y):
+            proved_graph = graph(proved.formula)
+            sample_graph = graph(sample)
+            print(json.dumps({
+                'proved': proved_graph.dict(),
+                'sample': sample_graph.dict(),
+                'y': y
+            }))
+
+        for positive in random.sample(tuple(positive), sample_size):
+            if positive not in self.positive:
+                output_sample(positive, 1)
+                self.positive.add((positive, proved.formula))
+        for negative in random.sample(tuple(negative), sample_size):
+            if negative not in self.negative:
+                output_sample(negative, 0)
+                self.negative.add((negative, proved.formula))
+
+    def _select(self) -> Optional[Entry]:
+        given = self.passive.get()
+        if any(match(generalisation.formula, given.formula) for generalisation in self.active):
+            return None
+        return given
+
+    def _activate(self, given: Entry):
+        self.active.append(given)
+        for partner in self.active:
+            for major, minor in (partner.formula, given.formula), (given.formula, partner.formula):
+                if not isinstance(major, C):
+                    continue
+                new = mp(major.left, major.right, minor, self.size_limit)
+                if new is None:
+                    continue
+                self._enqueue(new, given, partner)
+
+    def _enqueue(self, formula: F, *parents: Entry):
+        entry = Entry(
+            formula,
+            parents,
+        )
+        if match(formula, self.goal):
+            self.proof = entry
+            # print("proof!")
+            return
+
+        if self.largest is None or entry.tree_size >= self.largest.tree_size:
+            self.largest = entry
+        entry.priority = self._score(formula)
+        self.passive.put(entry)
+
+    def _score(self, formula: F) -> float:
+        return random.random()
 
 AXIOMS: List[F] = [
     C(1,C(2,1)),
@@ -116,32 +347,10 @@ AXIOMS: List[F] = [
 
 GOAL: F = C(C(1,2),C(C(2,3),C(1,3)))
 
+STEP_LIMIT = 100
+SIZE_LIMIT = 1000
+
 if __name__ == '__main__':
-    passive = AXIOMS
-    active = []
-    while passive:
-        given = passive[0]
-        print("activate:", given)
-        active.append(given)
-        passive = [
-            instance for instance in passive[1:]
-            if not match({}, given, instance)
-        ]
-        for partner in active:
-            for major, minor in (partner, given), (given, partner):
-                if not isinstance(major, C):
-                    continue
-                new = mp(major.left, major.right, minor)
-                if new is None:
-                    continue
-                retain = True
-                for generalisation in active:
-                    if match({}, generalisation, new):
-                        retain = False
-                        break
-                if retain:
-                    if match({}, new, GOAL):
-                        print("proof:", new)
-                        import sys
-                        sys.exit(0)
-                    passive.append(new)
+    environment = Environment(AXIOMS, GOAL, STEP_LIMIT, SIZE_LIMIT)
+    while True:
+        environment.run()

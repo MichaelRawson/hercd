@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+from argparse import ArgumentParser
+import gzip
+import json
+import torch
+from torch_geometric.data import Data, InMemoryDataset
+from torch_geometric.loader import DataLoader
+
+class Graphs(InMemoryDataset):
+    file: str
+    def __init__(self, file: str):
+        self.file = file
+        super().__init__('.')
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self) -> str:
+        return self.file
+
+    @property
+    def processed_file_names(self):
+        return self.file.replace('.jsonl.gz', '.pt')
+
+    def process(self):
+        data = []
+        with gzip.open(self.file, 'r') as stream:
+            for line in stream:
+                raw = json.loads(line)
+                data.append(Data(
+                    sample_nodes = torch.tensor(raw['sample']['nodes']),
+                    sample_edge_index = torch.tensor([
+                        raw['sample']['sources'],
+                        raw['sample']['targets']
+                    ]),
+                    proved_nodes = torch.tensor(raw['proved']['nodes']),
+                    proved_edge_index = torch.tensor([
+                        raw['proved']['sources'],
+                        raw['proved']['targets']
+                    ]),
+                    y = raw['y']
+                ))
+        data, slices = self.collate(data)
+        torch.save((data, slices), self.processed_paths[0])
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('FILE')
+    args = parser.parse_args()
+
+    graphs = Graphs(args.FILE)
+    print(graphs)
+    """
+    for item in DataLoader(graphs, follow_batch=['sample_nodes', 'proved_nodes']):
+        print(item)
+    """
