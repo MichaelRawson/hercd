@@ -196,7 +196,9 @@ class Graph:
     VAR = 0
     FUN = 1
     C1 = 2
-    C2 = 2
+    C2 = 3
+    SAMPLE = 4
+    GOAL = 5
     nodes: List[int]
     sources: List[int]
     targets: List[int]
@@ -208,18 +210,19 @@ class Graph:
         self.targets = []
         self.cache = {}
 
-    def dict(self) -> Dict[str, List[int]]:
-        return {
-            'nodes': self.nodes,
-            'sources': self.sources,
-            'targets': self.targets
-        }
+    def encode(self, f: F, goal: Optional[bool] = None) -> int:
+        node = len(self.nodes)
+        if goal is not None:
+            self.nodes.append(Graph.GOAL if goal else Graph.SAMPLE)
+            child = self.encode(f)
+            self.sources.append(node)
+            self.targets.append(child)
+            self.cache.clear()
+            return node
 
-    def encode(self, f: F) -> int:
         if f in self.cache:
             return self.cache[f]
 
-        node = len(self.nodes)
         if isinstance(f, int):
             self.nodes.append(Graph.VAR)
         elif isinstance(f, str):
@@ -239,15 +242,9 @@ class Graph:
         self.cache[f] = node
         return node
 
-def graph(f: F) -> Graph:
-    target = Graph()
-    target.encode(f)
-    return target
-
 class Environment:
     axioms: List[F]
     goal: F
-    goal_graph: Graph
     active: List[Entry]
     passive: PriorityQueue[Entry]
     proof: Optional[Entry]
@@ -257,7 +254,6 @@ class Environment:
     def __init__(self, axioms: List[F], goal: F):
         self.axioms = axioms
         self.goal = goal
-        self.goal_graph = graph(goal)
         self.positive = set()
         self.negative = set()
 
@@ -277,7 +273,6 @@ class Environment:
             self._activate(given)
             step += 1
 
-        return
         proved = self.proof if self.proof is not None else self.largest
         assert proved is not None
 
@@ -298,11 +293,13 @@ class Environment:
         sample_size = min(len(positive), len(negative))
 
         def output_sample(sample, y):
-            proved_graph = graph(proved.formula)
-            sample_graph = graph(sample)
+            graph = Graph()
+            graph.encode(sample, goal=False)
+            graph.encode(proved.formula, goal=True)
             print(json.dumps({
-                'proved': proved_graph.dict(),
-                'sample': sample_graph.dict(),
+                'nodes': graph.nodes,
+                'sources': graph.sources,
+                'targets': graph.targets,
                 'y': y
             }))
 
@@ -322,7 +319,6 @@ class Environment:
         return given
 
     def _activate(self, given: Entry):
-        print(given)
         self.active.append(given)
         for partner in self.active:
             for major, minor in (partner.formula, given.formula), (given.formula, partner.formula):
