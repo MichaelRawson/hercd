@@ -3,8 +3,18 @@ from argparse import ArgumentParser
 import gzip
 import json
 import torch
+from torch.nn import Embedding, Module, ModuleList, Linear
+from torch.nn import functional as F
+from torch.utils.tensorboard.writer import SummaryWriter
+from torch.optim import Adam
 from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.loader import DataLoader
+from torch_geometric.nn import BatchNorm, GCNConv, global_add_pool
+
+BATCH_SIZE = 64
+CHANNELS = 32
+CONVOLUTIONS = 16
+HIDDEN = 1024
 
 class Graphs(InMemoryDataset):
     file: str
@@ -29,19 +39,54 @@ class Graphs(InMemoryDataset):
                 data.append(Data(
                     sample_nodes = torch.tensor(raw['sample']['nodes']),
                     sample_edge_index = torch.tensor([
-                        raw['sample']['sources'],
-                        raw['sample']['targets']
+                        raw['sample']['sources'] + raw['sample']['targets'],
+                        raw['sample']['targets'] + raw['sample']['sources']
                     ]),
                     proved_nodes = torch.tensor(raw['proved']['nodes']),
                     proved_edge_index = torch.tensor([
-                        raw['proved']['sources'],
-                        raw['proved']['targets']
+                        raw['proved']['sources'] + raw['proved']['targets'],
+                        raw['proved']['targets'] + raw['proved']['sources']
                     ]),
-                    y = raw['y']
+                    y = torch.tensor(raw['y'], dtype=torch.float)
                 ))
         data, slices = self.collate(data)
         torch.save((data, slices), self.processed_paths[0])
 
+class GraphEmbedding(Module):
+    def __init__(self):
+        super().__init__()
+        self.embedding = Embedding(3, CHANNELS)
+        self.bn = ModuleList([
+            BatchNorm(CHANNELS)
+            for _ in range(CONVOLUTIONS)
+        ])
+        self.conv = ModuleList([
+            GCNConv(CHANNELS, CHANNELS)
+            for _ in range(CONVOLUTIONS)
+        ])
+
+    def forward(self, x, batch, edge_index):
+        x = self.embedding(x)
+        for bn, conv in zip(self.bn, self.conv):
+            convolved = conv(bn(x), edge_index)
+            x = F.relu(x + convolved)
+        x = global_add_pool(x, batch)
+        return x
+
+class Model(Module):
+    def __init__(self):
+        super().__init__()
+        self.sample_embed = GraphEmbedding()
+        self.prove_embed = GraphEmbedding()
+        self.hidden = Linear(CHANNELS + CHANNELS, HIDDEN)
+        self.output = Linear(HIDDEN, 1)
+
+    def forward(self, batch):
+        sample = self.sample_embed(batch.sample_nodes, batch.sample_nodes_batch, batch.sample_edge_index)
+        proved = self.sample_embed(batch.proved_nodes, batch.proved_nodes_batch, batch.proved_edge_index)
+        combined = torch.cat((sample, proved), dim=-1)
+        hidden = F.relu(self.hidden(combined))
+        return self.output(hidden).squeeze(-1)
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -49,8 +94,18 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     graphs = Graphs(args.FILE)
-    print(graphs)
-    """
-    for item in DataLoader(graphs, follow_batch=['sample_nodes', 'proved_nodes']):
-        print(item)
-    """
+    model = Model().to('cuda')
+    optimizer = Adam(model.parameters())
+
+    step = 1
+    writer = SummaryWriter()
+    while True:
+        for batch in DataLoader(graphs, batch_size=BATCH_SIZE, shuffle=True, follow_batch=['sample_nodes', 'proved_nodes']):
+            optimizer.zero_grad()
+            batch = batch.to('cuda')
+            prediction = model(batch)
+            loss = F.binary_cross_entropy_with_logits(prediction, batch.y)
+            loss.backward()
+            optimizer.step()
+            writer.add_scalar('loss', loss.detach(), global_step=step)
+            step += 1
