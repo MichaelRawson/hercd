@@ -202,26 +202,28 @@ class Graph:
     nodes: List[int]
     sources: List[int]
     targets: List[int]
-    cache: Dict[F, int]
+    _cache: Dict[F, int]
 
-    def __init__(self):
-        self.nodes = []
-        self.sources = []
-        self.targets = []
-        self.cache = {}
+    def __init__(self, sample: F, graph: F):
+        self.nodes = [Graph.SAMPLE, Graph.GOAL]
+        self.sources = [0]
+        self.targets = [1]
+        self._cache = {}
 
-    def encode(self, f: F, goal: Optional[bool] = None) -> int:
+        node = self._formula(sample)
+        self.sources.append(0)
+        self.targets.append(node)
+        self._cache.clear()
+
+        node = self._formula(graph)
+        self.sources.append(1)
+        self.targets.append(node)
+        self._cache.clear()
+
+    def _formula(self, f: F) -> int:
         node = len(self.nodes)
-        if goal is not None:
-            self.nodes.append(Graph.GOAL if goal else Graph.SAMPLE)
-            child = self.encode(f)
-            self.sources.append(node)
-            self.targets.append(child)
-            self.cache.clear()
-            return node
-
-        if f in self.cache:
-            return self.cache[f]
+        if f in self._cache:
+            return self._cache[f]
 
         if isinstance(f, int):
             self.nodes.append(Graph.VAR)
@@ -230,8 +232,8 @@ class Graph:
         else:
             self.nodes.append(Graph.C1)
             self.nodes.append(Graph.C2)
-            left = self.encode(f.left)
-            right = self.encode(f.right)
+            left = self._formula(f.left)
+            right = self._formula(f.right)
             self.sources.append(node)
             self.targets.append(node + 1)
             self.sources.append(node + 1)
@@ -239,7 +241,7 @@ class Graph:
             self.sources.append(node)
             self.targets.append(right)
 
-        self.cache[f] = node
+        self._cache[f] = node
         return node
 
 class Environment:
@@ -293,9 +295,7 @@ class Environment:
         sample_size = min(len(positive), len(negative))
 
         def output_sample(sample, y):
-            graph = Graph()
-            graph.encode(sample, goal=False)
-            graph.encode(proved.formula, goal=True)
+            graph = Graph(sample, proved.formula)
             print(json.dumps({
                 'nodes': graph.nodes,
                 'sources': graph.sources,
