@@ -1,5 +1,5 @@
 /processed
 /Axioms
 /Problems
-/__pycache__
+**__pycache__**
 *.jsonl.gz
