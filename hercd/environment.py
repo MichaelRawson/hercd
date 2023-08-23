@@ -1,11 +1,10 @@
-from itertools import chain
 import random
 from typing import Generator, List, Optional, Set, Tuple
 
 import torch
 
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
-from .constants import ACTIVATION_LIMIT
+from .constants import STEP_LIMIT, EPSILON
 from .graph import Graph
 from .model import Model
 
@@ -31,8 +30,8 @@ class Environment:
     axioms: List[F]
     goal: F
     model: Optional[Model]
-    active: List[Entry]
-    passive: List[Entry]
+    known: List[Entry]
+    discarded: Set[F]
     weights: List[float]
     seen: Set[F]
     proof: Optional[Entry]
@@ -45,38 +44,45 @@ class Environment:
 
     def run(self) -> bool:
         self._reset()
-        for axiom in self.axioms:
-            self._enqueue(axiom)
 
-        step = 0
-        while self.proof is None and self.passive and step < ACTIVATION_LIMIT:
-            given = self._select()
-            if given is None:
-                continue
-            print(given)
-            self._activate(given)
-            step += 1
+        while self.proof is None and len(self.known) < STEP_LIMIT:
+            if random.random() < EPSILON:
+                first, second = random.choices(self.known, k=2)
+            else:
+                weights = torch.softmax(torch.tensor(self.weights), 0).tolist()
+                first, second = random.choices(self.known, weights=weights, k=2)
+
+            for major, minor in (first.formula, second.formula), (second.formula, first.formula):
+                if not isinstance(major, C):
+                    continue
+                try:
+                    new = modus_ponens(major.left, major.right, minor)
+                except (NoUnifier, TooBig):
+                    continue
+                self._add(new, first, second)
 
         return self.proof is not None
 
     def _reset(self):
-        self.active = []
-        self.passive = []
+        self.known = []
+        self.discarded = set()
         self.weights = []
         self.seen = set()
         self.proof = None
+        for axiom in self.axioms:
+            self._add(axiom)
 
     def sample(self) -> Tuple[F, List[F], List[F]]:
-        target = self.proof if self.proof is not None else self.active[-1]
+        target = self.proof if self.proof is not None else max(self.known, key=lambda entry: entry.tree_size)
         assert target is not None
 
         positive = {
             entry.formula
             for entry in iter(target.ancestors())
         }
-        negative = {
+        negative = self.discarded | {
             entry.formula
-            for entry in self.active
+            for entry in self.known
             if entry.formula not in positive
         }
 
@@ -85,31 +91,24 @@ class Environment:
         positive_sample = random.sample(tuple(positive), sample_size)
         return target.formula, negative_sample, positive_sample
 
-    def _select(self) -> Optional[Entry]:
-        weights = torch.softmax(torch.tensor(self.weights), 0).tolist()
-        index = random.choices(range(len(self.passive)), weights=weights)[0]
-        given = self.passive.pop(index)
-        self.weights.pop(index)
-        if any(match(generalisation.formula, given.formula) for generalisation in self.active):
-            return None
-        return given
-
-    def _activate(self, given: Entry):
-        self.active.append(given)
-        for partner in self.active:
-            for major, minor in (partner.formula, given.formula), (given.formula, partner.formula):
-                if not isinstance(major, C):
-                    continue
-                try:
-                    new = modus_ponens(major.left, major.right, minor)
-                except (NoUnifier, TooBig):
-                    continue
-                self._enqueue(new, given, partner)
-
-    def _enqueue(self, formula: F, *parents: Entry):
+    def _add(self, formula: F, *parents: Entry):
         if formula in self.seen:
             return
         self.seen.add(formula)
+
+        for known in self.known:
+            if match(known.formula, formula):
+                self.discarded.add(formula)
+                return
+
+        # will be retained at this point
+        print(len(self.known), formula)
+
+        for index in reversed(range(len(self.known))):
+            if match(formula, self.known[index].formula):
+                self.discarded.add(self.known[index].formula)
+                del self.known[index]
+                del self.weights[index]
 
         entry = Entry(
             formula,
@@ -120,8 +119,9 @@ class Environment:
             print("proof!")
             return
 
-        self.passive.append(entry)
+        self.known.append(entry)
         self.weights.append(self._score(formula))
+        return
 
     def _score(self, formula: F) -> float:
         if self.model is None:

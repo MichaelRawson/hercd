@@ -51,11 +51,10 @@ def learn(axioms: List[F], goal: F):
     total_batches = 0
     while True:
         environment.run()
-        writer.add_scalar('passive set', len(environment.passive), global_step=total_batches)
         target, negatives, positives = environment.sample()
-        writer.add_scalar('experience size', len(positives), global_step=total_batches)
+        writer.add_scalar('tree size', len(positives), global_step=total_batches)
         if environment.proof is not None:
-            return
+            writer.add_scalar('steps to proof', len(positives), global_step=total_batches)
         for negative in negatives:
             experience.append(Graph(negative, target).torch(False))
         for positive in positives:
@@ -65,7 +64,8 @@ def learn(axioms: List[F], goal: F):
         while len(experience) > MAX_EXPERIENCE:
             experience.pop()
 
-        print(f'target: {target}, +ve: {len(positives)}, passive: {len(environment.passive)}, train: {len(experience)}')
+        print(f'target: {target}, +ve: {len(positives)}, train: {len(experience)}')
+        writer.add_scalar('experience buffer', len(experience), global_step=total_batches)
 
         model.train()
         episode_batches = 0
@@ -81,11 +81,11 @@ def learn(axioms: List[F], goal: F):
 
 AXIOMS: List[F] = [
     c(1,c(2,1)),
-    c(c(c(1,'⊥'),'⊥'),1),
+    c(c(c(1,'*'),'*'),1),
     c(c(1,c(2,3)),c(c(1,2),c(1,3)))
 ]
-GOAL: F = c(c(c(c(c(1,2),c(3,'⊥')),4),'⊥'),c(c('⊥',1),c(3,1)))
-#c(c(1,2),c(c(2,3),c(1,3)))
+GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
+#c(c(c(c(c(1,2),c(3,'⊥')),4),'⊥'),c(c('⊥',1),c(3,1)))
 
 if __name__ == '__main__':
     random.seed(0)
