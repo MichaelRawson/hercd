@@ -72,7 +72,7 @@ class Environment:
         for axiom in self.axioms:
             self._add(axiom)
 
-    def sample(self) -> Tuple[F, List[F], List[F]]:
+    def data(self) -> Tuple[F, Set[F], Set[F]]:
         target = self.proof if self.proof is not None else max(self.known, key=lambda entry: entry.tree_size)
         assert target is not None
 
@@ -86,10 +86,7 @@ class Environment:
             if entry.formula not in positive
         }
 
-        sample_size = min(len(positive), len(negative))
-        negative_sample = random.sample(tuple(negative), sample_size)
-        positive_sample = random.sample(tuple(positive), sample_size)
-        return target.formula, negative_sample, positive_sample
+        return target.formula, negative, positive
 
     def _add(self, formula: F, *parents: Entry):
         if formula in self.seen:

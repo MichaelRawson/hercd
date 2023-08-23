@@ -35,7 +35,7 @@ def generate(axioms: List[F], goal: F):
     environment = Environment(axioms, goal)
     while True:
         environment.run()
-        target, negatives, positives = environment.sample()
+        target, negatives, positives = environment.data()
         for negative in negatives:
             output_sample(negative, target, False)
         for positive in positives:
@@ -48,24 +48,26 @@ def learn(axioms: List[F], goal: F):
     experience = []
 
     environment = Environment(axioms, goal, model)
+    total_episodes = 0
     total_batches = 0
     while True:
         environment.run()
-        target, negatives, positives = environment.sample()
-        writer.add_scalar('tree size', len(positives), global_step=total_batches)
+        target, negatives, positives = environment.data()
+
+        total_episodes += 1
+        writer.add_scalar('positive', len(positives), global_step=total_episodes)
+        writer.add_scalar('negative', len(negatives), global_step=total_episodes)
+        print(f'target: {target}, +ve: {len(positives)}, -ve: {len(negatives)}')
         if environment.proof is not None:
-            writer.add_scalar('steps to proof', len(positives), global_step=total_batches)
+            writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
+
         for negative in negatives:
             experience.append(Graph(negative, target).torch(False))
         for positive in positives:
             experience.append(Graph(positive, target).torch(True))
-
         random.shuffle(experience)
         while len(experience) > MAX_EXPERIENCE:
             experience.pop()
-
-        print(f'target: {target}, +ve: {len(positives)}, train: {len(experience)}')
-        writer.add_scalar('experience buffer', len(experience), global_step=total_batches)
 
         model.train()
         episode_batches = 0
@@ -84,8 +86,8 @@ AXIOMS: List[F] = [
     c(c(c(1,'*'),'*'),1),
     c(c(1,c(2,3)),c(c(1,2),c(1,3)))
 ]
-GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
-#c(c(c(c(c(1,2),c(3,'⊥')),4),'⊥'),c(c('⊥',1),c(3,1)))
+GOAL: F = c(c(c(c(c(1,2),c(3,'*')),4),'*'),c(c('*',1),c(3,1)))
+#c(c(1,2),c(c(2,3),c(1,3)))
 
 if __name__ == '__main__':
     random.seed(0)
