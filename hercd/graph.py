@@ -1,6 +1,9 @@
 from enum import IntEnum
 from typing import Dict, List
 
+import torch
+from torch_geometric.data import Data
+
 from .cd import F
 
 """a node in a graph"""
@@ -20,28 +23,36 @@ class Graph:
     sources: List[int]
     """indices of target nodes"""
     targets: List[int]
-    _cache: Dict[F, int]
 
-    def __init__(self, sample: F, graph: F):
+    def __init__(self, sample: F, target: F):
         self.nodes = [Node.SAMPLE, Node.GOAL]
         self.sources = [0]
         self.targets = [1]
-        self._cache = {}
+        cache = {}
 
-        node = self._formula(sample)
+        node = self._formula(cache, sample)
         self.sources.append(0)
         self.targets.append(node)
-        self._cache.clear()
+        cache.clear()
 
-        node = self._formula(graph)
+        node = self._formula(cache, target)
         self.sources.append(1)
         self.targets.append(node)
-        self._cache.clear()
 
-    def _formula(self, f: F) -> int:
+    def torch(self, y: bool):
+        return Data(
+            x = torch.tensor(self.nodes),
+            edge_index = torch.tensor([
+                self.sources + self.targets,
+                self.targets + self.sources
+            ]),
+            y = torch.tensor(float(y))
+        )
+
+    def _formula(self, cache: Dict[F, int], f: F) -> int:
         node = len(self.nodes)
-        if f in self._cache:
-            return self._cache[f]
+        if f in cache:
+            return cache[f]
 
         if isinstance(f, int):
             self.nodes.append(Node.VAR)
@@ -50,8 +61,8 @@ class Graph:
         else:
             self.nodes.append(Node.C1)
             self.nodes.append(Node.C2)
-            left = self._formula(f.left)
-            right = self._formula(f.right)
+            left = self._formula(cache, f.left)
+            right = self._formula(cache, f.right)
             self.sources.append(node)
             self.targets.append(node + 1)
             self.sources.append(node + 1)
@@ -59,5 +70,5 @@ class Graph:
             self.sources.append(node)
             self.targets.append(right)
 
-        self._cache[f] = node
+        cache[f] = node
         return node

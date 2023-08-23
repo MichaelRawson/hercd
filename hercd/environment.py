@@ -1,21 +1,22 @@
-from heapq import heappush, heappop
 from itertools import chain
 import random
-from typing import Generator, List, Optional, Tuple
+from typing import Generator, List, Optional, Set, Tuple
+
+import torch
 
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import ACTIVATION_LIMIT
+from .graph import Graph
+from .model import Model
 
 class Entry:
     formula: F
     parents: Tuple['Entry']
-    priority: float
     tree_size: int
 
     def __init__(self, term: F, parents: Tuple['Entry']):
         self.formula = term
         self.parents = parents
-        self.priority = 0
         self.tree_size = sum(parent.tree_size for parent in parents) + 1
 
     def ancestors(self) -> Generator['Entry', None, None]:
@@ -23,23 +24,23 @@ class Entry:
             yield parent
             yield from parent.ancestors()
 
-    def __lt__(self, other):
-        return self.priority < other.priority
-
     def __repr__(self):
         return repr(self.formula)
 
 class Environment:
     axioms: List[F]
     goal: F
+    model: Optional[Model]
     active: List[Entry]
     passive: List[Entry]
+    weights: List[float]
+    seen: Set[F]
     proof: Optional[Entry]
-    largest: Optional[Entry]
 
-    def __init__(self, axioms: List[F], goal: F):
+    def __init__(self, axioms: List[F], goal: F, model: Optional[Model] = None):
         self.axioms = axioms
         self.goal = goal
+        self.model = model
         self._reset()
 
     def run(self) -> bool:
@@ -52,6 +53,7 @@ class Environment:
             given = self._select()
             if given is None:
                 continue
+            print(given)
             self._activate(given)
             step += 1
 
@@ -60,11 +62,12 @@ class Environment:
     def _reset(self):
         self.active = []
         self.passive = []
+        self.weights = []
+        self.seen = set()
         self.proof = None
-        self.largest = None
 
     def sample(self) -> Tuple[F, List[F], List[F]]:
-        target = self.proof if self.proof is not None else self.largest
+        target = self.proof if self.proof is not None else self.active[-1]
         assert target is not None
 
         positive = {
@@ -73,7 +76,7 @@ class Environment:
         }
         negative = {
             entry.formula
-            for entry in chain(self.active, self.passive)
+            for entry in self.active
             if entry.formula not in positive
         }
 
@@ -83,7 +86,10 @@ class Environment:
         return target.formula, negative_sample, positive_sample
 
     def _select(self) -> Optional[Entry]:
-        given = heappop(self.passive)
+        weights = torch.softmax(torch.tensor(self.weights), 0).tolist()
+        index = random.choices(range(len(self.passive)), weights=weights)[0]
+        given = self.passive.pop(index)
+        self.weights.pop(index)
         if any(match(generalisation.formula, given.formula) for generalisation in self.active):
             return None
         return given
@@ -101,19 +107,26 @@ class Environment:
                 self._enqueue(new, given, partner)
 
     def _enqueue(self, formula: F, *parents: Entry):
+        if formula in self.seen:
+            return
+        self.seen.add(formula)
+
         entry = Entry(
             formula,
             parents,
         )
         if match(formula, self.goal):
             self.proof = entry
-            # print("proof!")
+            print("proof!")
             return
 
-        if self.largest is None or entry.tree_size >= self.largest.tree_size:
-            self.largest = entry
-        entry.priority = self._score(formula)
-        heappush(self.passive, entry)
+        self.passive.append(entry)
+        self.weights.append(self._score(formula))
 
     def _score(self, formula: F) -> float:
-        return random.random()
+        if self.model is None:
+            return 1.0
+
+        datum = Graph(formula, self.goal).torch(False).to('cuda')
+        self.model.eval()
+        return self.model(datum).item()

@@ -6,6 +6,17 @@ from .constants import CACHE_SIZE, TERM_SIZE_LIMIT
 """a formula - constant (str), variable (int) or C"""
 F = Union[str, int, 'C']
 
+def name(f: F) -> str:
+    if isinstance(f, C):
+        return repr(f)
+    if isinstance(f, str):
+        return f
+    sign = '-' if f < 0 else ''
+    f = abs(f)
+    if f <= 26:
+        return sign + chr(ord('a') + f - 1)
+    return f'{sign}x{f}'
+
 """a formula exceeded the size limit"""
 class TooBig(Exception):
     pass
@@ -33,7 +44,7 @@ class C:
         return id(self) == id(other) or isinstance(other, C) and self.left == other.left and self.right == other.right
 
     def __repr__(self) -> str:
-        return f'C{self.left}{self.right}'
+        return f'C{name(self.left)}{name(self.right)}'
 
 """create a C with an LRU cache"""
 @lru_cache(maxsize=CACHE_SIZE)

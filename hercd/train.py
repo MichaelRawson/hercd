@@ -1,23 +1,20 @@
-#!/usr/bin/env python3
-from argparse import ArgumentParser
 import gzip
 import json
+from typing import Tuple
+
 import torch
-from torch.nn import Embedding, Module, ModuleList, Linear
+from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.tensorboard.writer import SummaryWriter
-from torch.optim import Adam
+from torch.optim import Adam, Optimizer
 from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import BatchNorm, GCNConv, global_add_pool
 
-NODE_TYPES = 6
+from .model import Model
+
 BATCH_SIZE = 64
-CHANNELS = 8
-CONVOLUTIONS = 8
-HIDDEN = 128
 
-class Graphs(InMemoryDataset):
+class FileDataset(InMemoryDataset):
     file: str
     def __init__(self, file: str):
         self.file = file
@@ -48,59 +45,26 @@ class Graphs(InMemoryDataset):
         data, slices = self.collate(data)
         torch.save((data, slices), self.processed_paths[0])
 
-class Model(Module):
-    embedding: Embedding
-    bn: ModuleList
-    conv: ModuleList
-    hidden: Linear
-    output: Linear
+def train_step(model: Model, optimizer: Optimizer, batch) -> Tuple[Tensor, Tensor]:
+    optimizer.zero_grad()
+    batch = batch.to('cuda')
+    prediction = model(batch)
+    loss = F.binary_cross_entropy_with_logits(prediction, batch.y)
+    loss.backward()
+    optimizer.step()
+    return prediction.detach(), loss.detach()
 
-    def __init__(self):
-        super().__init__()
-        self.embedding = Embedding(NODE_TYPES, CHANNELS)
-        self.bn = ModuleList([
-            BatchNorm(CHANNELS)
-            for _ in range(CONVOLUTIONS)
-        ])
-        self.conv = ModuleList([
-            GCNConv(CHANNELS, CHANNELS)
-            for _ in range(CONVOLUTIONS)
-        ])
-        self.hidden = Linear(CHANNELS, HIDDEN)
-        self.output = Linear(HIDDEN, 1)
-
-    def forward(self, batch):
-        x = batch.x
-        edge_index = batch.edge_index
-        batch = batch.batch
-        x = self.embedding(x)
-        for bn, conv in zip(self.bn, self.conv):
-            convolved = conv(bn(x), edge_index)
-            x = F.relu(x + convolved)
-        x = global_add_pool(x, batch)
-        x = F.relu(self.hidden(x))
-        return self.output(x).squeeze(-1)
-
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('FILE')
-    args = parser.parse_args()
-
-    graphs = Graphs(args.FILE)
+def train_from_file(path: str):
+    dataset = FileDataset(path)
     model = Model().to('cuda')
     optimizer = Adam(model.parameters())
 
     step = 1
     writer = SummaryWriter()
     while True:
-        for batch in DataLoader(graphs, batch_size=BATCH_SIZE, shuffle=True):
-            optimizer.zero_grad()
-            batch = batch.to('cuda')
-            prediction = model(batch)
-            loss = F.binary_cross_entropy_with_logits(prediction, batch.y)
-            loss.backward()
-            optimizer.step()
-            writer.add_scalar('loss', loss.detach(), global_step=step)
+        for batch in DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True):
+            prediction, loss = train_step(model, optimizer, batch)
+            writer.add_scalar('loss', loss, global_step=step)
             if step % 100 == 0:
                 print(torch.stack((torch.sigmoid(prediction).detach(), batch.y), dim=-1))
             step += 1
