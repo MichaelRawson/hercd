@@ -31,7 +31,6 @@ class Environment:
     goal: F
     model: Optional[Model]
     known: List[Entry]
-    discarded: Set[F]
     weights: List[float]
     seen: Set[F]
     proof: Optional[Entry]
@@ -65,7 +64,6 @@ class Environment:
 
     def _reset(self):
         self.known = []
-        self.discarded = set()
         self.weights = []
         self.seen = set()
         self.proof = None
@@ -80,7 +78,7 @@ class Environment:
             entry.formula
             for entry in iter(target.ancestors())
         }
-        negative = self.discarded | {
+        negative = {
             entry.formula
             for entry in self.known
             if entry.formula not in positive
@@ -95,7 +93,6 @@ class Environment:
 
         for known in self.known:
             if match(known.formula, formula):
-                self.discarded.add(formula)
                 return
 
         # will be retained at this point
@@ -103,7 +100,6 @@ class Environment:
 
         for index in reversed(range(len(self.known))):
             if match(formula, self.known[index].formula):
-                self.discarded.add(self.known[index].formula)
                 del self.known[index]
                 del self.weights[index]
 
