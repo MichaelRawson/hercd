@@ -1,12 +1,13 @@
 from functools import lru_cache
-from typing import Dict, Union, Set, Tuple
+from typing import Union
 
 from .constants import CACHE_SIZE, TERM_SIZE_LIMIT
 
-"""a formula - constant (str), variable (int) or C"""
 F = Union[str, int, 'C']
+"""a formula - constant (str), variable (int) or C"""
 
 def name(f: F) -> str:
+    """a human-readable name for a formula"""
     if isinstance(f, C):
         return repr(f)
     if isinstance(f, str):
@@ -17,16 +18,20 @@ def name(f: F) -> str:
         return sign + chr(ord('a') + f - 1)
     return f'{sign}x{f}'
 
-"""a formula exceeded the size limit"""
 class TooBig(Exception):
-    pass
+    """a formula exceeded the size limit"""
 
-"""implication operator"""
 class C:
+    """a 'C' (implication) formula"""
+
     left: F
+    """the left-hand side"""
     right: F
+    """the right-hand side"""
     size: int
+    """the tree size of the formula"""
     hash: int
+    """a precomputed hash"""
 
     def __init__(self, left: F, right: F):
         assert left != 0 and right != 0
@@ -46,28 +51,29 @@ class C:
     def __repr__(self) -> str:
         return f'C{name(self.left)}{name(self.right)}'
 
-"""create a C with an LRU cache"""
 @lru_cache(maxsize=CACHE_SIZE)
 def c(left: F, right: F) -> C:
+    """create a C with an LRU cache"""
     return C(left, right)
 
-"""tree size of a formula"""
 def size(f: F) -> int:
+    """tree size of a formula"""
     if isinstance(f, C):
         return f.size
     return 1
 
 @lru_cache(maxsize=CACHE_SIZE)
-def negated(f: F) -> F:
+def flip(f: F) -> F:
+    """a formula with all its variables negated - useful for renaming"""
     if isinstance(f, str):
         return f
     elif isinstance(f, int):
         return -f
     else:
-        return c(negated(f.left), negated(f.right))
+        return c(flip(f.left), flip(f.right))
 
-"""canonically rename `target`, using and mutating `renaming`"""
-def rename(renaming: Dict[int, int], target: F) -> F:
+def rename(renaming: dict[int, int], target: F) -> F:
+    """canonically rename `target`, using and mutating `renaming`"""
     if isinstance(target, str):
         return target
     elif isinstance(target, int):
@@ -80,13 +86,9 @@ def rename(renaming: Dict[int, int], target: F) -> F:
     else:
         return c(rename(renaming, target.left), rename(renaming, target.right))
 
-"""rename `target` with an empty renaming"""
-def canonical(target: F) -> F:
-    return rename({}, target)
-
-"""substitute `variable` to `formula` in `target`"""
 @lru_cache(maxsize=CACHE_SIZE)
 def substitute(variable: int, formula: F, target: F) -> F:
+    """substitute `variable` for `formula` in `target`"""
     if isinstance(target, str):
         return target
     elif isinstance(target, int):
@@ -97,8 +99,8 @@ def substitute(variable: int, formula: F, target: F) -> F:
         return c(left, right)
 
 
-"""apply `subst` to `target`"""
-def apply(subst: Dict[int, F], target: F) -> F:
+def apply(subst: dict[int, F], target: F) -> F:
+    """apply `subst` to `target`"""
     if isinstance(target, str):
         return target
     elif isinstance(target, int):
@@ -108,23 +110,22 @@ def apply(subst: Dict[int, F], target: F) -> F:
         right = apply(subst, target.right)
         return c(left, right)
 
-"""true if x occurs in F"""
 @lru_cache(maxsize=CACHE_SIZE)
 def occurs(x: int, f: F) -> bool:
+    """true if x occurs in F"""
     if isinstance(f, str):
         return False
     if isinstance(f, int):
         return x == f
     return occurs(x, f.left) or occurs(x, f.right)
 
-"""two formulas don't unify"""
 class NoUnifier(Exception):
-    pass
+    """two formulas don't unify"""
 
-"""unify two formulas and return their mgu"""
-def unify(left: F, right: F) -> Dict[int, F]:
-    subst: Dict[int, F] = {}
-    todo: Set[Tuple[F, F]] = set()
+def unify(left: F, right: F) -> dict[int, F]:
+    """unify two formulas and return their most general unifier"""
+    subst: dict[int, F] = {}
+    todo: set[tuple[F, F]] = set()
 
     todo.add((left, right))
     while todo:
@@ -155,11 +156,11 @@ def unify(left: F, right: F) -> Dict[int, F]:
 
     return subst
 
-"""determine if `left` matches `right`"""
 @lru_cache(maxsize=CACHE_SIZE)
 def match(left: F, right: F) -> bool:
-    match: Dict[int, F] = {}
-    todo: Set[Tuple[F, F]] = set()
+    """determine if `left` matches `right`"""
+    match: dict[int, F] = {}
+    todo: set[tuple[F, F]] = set()
     todo.add((left, right))
     while todo:
         left, right = todo.pop()
@@ -180,9 +181,9 @@ def match(left: F, right: F) -> bool:
 
     return True
 
-"""modus ponens: unify `antecedent` and `target`, apply mgu to `consequent` and rename"""
 def modus_ponens(antecedent: F, consequent: F, target: F) -> F:
-    target = negated(target)
+    """modus ponens: unify `antecedent` and `target`, return substituted `consequent` - all with renaming"""
+    target = flip(target)
     subst = unify(antecedent, target)
     result = apply(subst, consequent)
     return rename({}, result)

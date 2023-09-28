@@ -1,19 +1,26 @@
+import torch
 from torch.nn import functional as F
 from torch.nn import Embedding, Module, ModuleList, Linear
-from torch_geometric.nn import BatchNorm, GCNConv, global_add_pool
+from torch_geometric.nn import BatchNorm, GCNConv
 
 NODE_TYPES = 6
 CHANNELS = 8
 CONVOLUTIONS = 8
-HIDDEN = 128
-
+HIDDEN = 32
 
 class Model(Module):
+    """policy network"""
+
     embedding: Embedding
+    """node embedding"""
     bn: ModuleList
+    """batch normalisation layers"""
     conv: ModuleList
+    """graph convolutional layers"""
     hidden: Linear
+    """final hidden layer"""
     output: Linear
+    """output layer"""
 
     def __init__(self):
         super().__init__()
@@ -26,17 +33,26 @@ class Model(Module):
             GCNConv(CHANNELS, CHANNELS)
             for _ in range(CONVOLUTIONS)
         ])
-        self.hidden = Linear(CHANNELS, HIDDEN)
+        self.hidden = Linear(2 * CHANNELS, HIDDEN)
         self.output = Linear(HIDDEN, 1)
 
-    def forward(self, batch):
-        x = batch.x
-        edge_index = batch.edge_index
-        batch = batch.batch
+    def forward(self, graph):
+        entries = graph.entry_index.shape[0]
+        line = torch.arange(entries).to('cuda')
+
+        x = graph.x
+        edge_index = graph.edge_index
         x = self.embedding(x)
         for bn, conv in zip(self.bn, self.conv):
             convolved = conv(bn(x), edge_index)
             x = F.relu(x + convolved)
-        x = global_add_pool(x, batch)
+
+        # project out the entries we care about
+        x = x[graph.entry_index]
+
+        # cartesian plane of all pairs of entry embeddings
+        grid = torch.cartesian_prod(line, line).view(entries, entries, 2)
+        x = x[grid].view(entries, entries, 2 * CHANNELS)
         x = F.relu(self.hidden(x))
-        return self.output(x).squeeze(-1)
+        x = self.output(x).view(entries, entries)
+        return x

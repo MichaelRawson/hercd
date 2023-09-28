@@ -1,93 +1,84 @@
 #!/usr/bin/env python3
-import json
 import random
 import torch
-from typing import List
 
 from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
-from torch_geometric.loader import DataLoader
 
 from .cd import F, c
 from .constants import BATCHES_PER_EPISODE, MAX_EXPERIENCE
 from .environment import Environment
 from .graph import Graph
 from .model import Model
-from .train import BATCH_SIZE, train_from_file, train_step
+from .train import BATCH_SIZE, compute_loss, train_from_file
 
-def output_sample(sample: F, target: F, y: bool):
-    graph = Graph(sample, target)
-    print(json.dumps({
-        'nodes': graph.nodes,
-        'sources': graph.sources,
-        'targets': graph.targets,
-        'y': y
-    }))
-
-def baseline(axioms: List[F], goal: F):
+def baseline(axioms: list[F], goal: F):
+    """uniform-policy mode"""
     environment = Environment(axioms, goal)
     while True:
         environment.run()
         if environment.proof is not None:
             return
 
-def generate(axioms: List[F], goal: F):
+def generate(axioms: list[F], goal: F):
+    """uniform-policy mode, but output training data"""
     environment = Environment(axioms, goal)
+    environment.silent = True
     while True:
         environment.run()
-        target, negatives, positives = environment.data()
-        for negative in negatives:
-            output_sample(negative, target, False)
-        for positive in positives:
-            output_sample(positive, target, True)
+        for graph in environment.training_graphs():
+            print(graph.json())
 
-def learn(axioms: List[F], goal: F):
+def learn(axioms: list[F], goal: F):
+    """online-learning 'reinforcement' mode"""
+
     model = Model().to('cuda')
     optimizer = Adam(model.parameters())
     writer = SummaryWriter()
     experience = []
 
-    environment = Environment(axioms, goal, model)
+    environment = Environment(axioms, goal)
+    environment.model = model
     total_episodes = 0
     total_batches = 0
     while True:
         environment.run()
-        target, negatives, positives = environment.data()
-
         total_episodes += 1
-        writer.add_scalar('positive', len(positives), global_step=total_episodes)
-        writer.add_scalar('negative', len(negatives), global_step=total_episodes)
-        print(f'target: {target}, +ve: {len(positives)}, -ve: {len(negatives)}')
         if environment.proof is not None:
             writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
 
-        for negative in negatives:
-            experience.append(Graph(negative, target).torch(False))
-        for positive in positives:
-            experience.append(Graph(positive, target).torch(True))
+        experience.extend((graph.torch() for graph in environment.training_graphs()))
         random.shuffle(experience)
         while len(experience) > MAX_EXPERIENCE:
             experience.pop()
 
         model.train()
         episode_batches = 0
+        graphs_in_batch = 0
         while episode_batches < BATCHES_PER_EPISODE:
-            loader = DataLoader(experience, batch_size=BATCH_SIZE, shuffle=True)
-            for batch in loader:
-                episode_batches += 1
-                total_batches += 1
+            for graph in experience:
                 if episode_batches >= BATCHES_PER_EPISODE:
                     break
-                _, loss = train_step(model, optimizer, batch)
-                writer.add_scalar('loss', loss, global_step=total_batches)
+                loss = compute_loss(model, graph)
+                loss.backward()
+                graphs_in_batch += 1
+                if graphs_in_batch == BATCH_SIZE:
+                    writer.add_scalar('loss', loss.detach(), global_step=total_batches)
+                    graphs_in_batch = 0
+                    episode_batches += 1
+                    total_batches += 1
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-AXIOMS: List[F] = [
+
+AXIOMS: list[F] = [
     c(1,c(2,1)),
     c(c(c(1,'*'),'*'),1),
     c(c(1,c(2,3)),c(c(1,2),c(1,3)))
 ]
-GOAL: F = c(c(c(c(c(1,2),c(3,'*')),4),'*'),c(c('*',1),c(3,1)))
-#c(c(1,2),c(c(2,3),c(1,3)))
+GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
+#c(c(c(c(c(1,2),c(3,'*')),4),'*'),c(c('*',1),c(3,1)))
+
 
 if __name__ == '__main__':
     random.seed(0)

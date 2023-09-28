@@ -1,21 +1,23 @@
 import gzip
 import json
-from typing import Tuple
 
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.tensorboard.writer import SummaryWriter
-from torch.optim import Adam, Optimizer
+from torch.optim import Adam
 from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.loader import DataLoader
 
 from .model import Model
 
 BATCH_SIZE = 64
 
 class FileDataset(InMemoryDataset):
+    """a dataset based on gzipped JSON lines representing a `Graph`"""
+
     file: str
+    """path to gzip archive supplied by the user"""
+
     def __init__(self, file: str):
         self.file = file
         super().__init__('.')
@@ -40,21 +42,30 @@ class FileDataset(InMemoryDataset):
                         raw['sources'] + raw['targets'],
                         raw['targets'] + raw['sources']
                     ]),
-                    y = torch.tensor(raw['y'], dtype=torch.float)
+                    entry_index = torch.tensor(raw['entries']),
+                    pairs = torch.tensor(raw['pairs'])
                 ))
         data, slices = self.collate(data)
         torch.save((data, slices), self.processed_paths[0])
 
-def train_step(model: Model, optimizer: Optimizer, batch) -> Tuple[Tensor, Tensor]:
-    optimizer.zero_grad()
-    batch = batch.to('cuda')
-    prediction = model(batch)
-    loss = F.binary_cross_entropy_with_logits(prediction, batch.y)
-    loss.backward()
-    optimizer.step()
-    return prediction.detach(), loss.detach()
+def compute_loss(model: Model, graph: Data) -> Tensor:
+    """compute the loss for this graph"""
+
+    # number of entries represented in the graph
+    entries = graph.entry_index.shape[0]
+
+    # matrix with zeroes everywhere except for coordinates in `graph.pairs`
+    y = torch.zeros(entries * entries)
+    indices = graph.pairs[:, 0] * entries + graph.pairs[:, 1]
+    y[indices] = 1.0
+    y = y.to('cuda').view(entries, entries)
+
+    graph = graph.to('cuda')
+    prediction = model(graph)
+    return F.binary_cross_entropy_with_logits(prediction, y)
 
 def train_from_file(path: str):
+    """train a model from data provided in `path`"""
     dataset = FileDataset(path)
     model = Model().to('cuda')
     optimizer = Adam(model.parameters())
@@ -62,9 +73,12 @@ def train_from_file(path: str):
     step = 1
     writer = SummaryWriter()
     while True:
-        for batch in DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True):
-            prediction, loss = train_step(model, optimizer, batch)
-            writer.add_scalar('loss', loss, global_step=step)
-            if step % 100 == 0:
-                print(torch.stack((torch.sigmoid(prediction).detach(), batch.y), dim=-1))
+        for graph in dataset:
+            assert isinstance(graph, Data)
+            loss = compute_loss(model, graph)
+            loss.backward()
+            writer.add_scalar('loss', loss.detach(), global_step=step)
+            if step % BATCH_SIZE == 0:
+                optimizer.step()
+                optimizer.zero_grad()
             step += 1
