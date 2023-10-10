@@ -1,5 +1,4 @@
 from enum import IntEnum
-import json
 
 import torch
 from torch_geometric.data import Data
@@ -25,49 +24,15 @@ class Graph:
     """indices of source nodes"""
     targets: list[int]
     """indices of target nodes"""
-    entries: list[int]
-    """indices of entry nodes"""
-    pairs: list[tuple[int, int]]
-    """entries which should be selected"""
-    cache: dict[F, int]
-    """map from subformulas to existing nodes"""
 
-    def __init__(self, goal: F):
+    def __init__(self, entry: F, goal: F):
         self.nodes = []
         self.sources = []
         self.targets = []
-        self.entries = []
-        self.pairs = []
-        self.cache = {}
 
-        self.goal(goal)
-
-    def entry(self, entry: F):
-        """add an entry's formula to the graph"""
-        formula = self._formula(entry)
-        node = len(self.nodes)
-        self.nodes.append(Node.ENTRY)
-        self.sources.append(node)
-        self.targets.append(formula)
-        self.entries.append(node)
-
-    def goal(self, goal: F):
-        """add a goal formula to the graph"""
-        formula = self._formula(goal)
-        node = len(self.nodes)
-        self.nodes.append(Node.GOAL)
-        self.sources.append(node)
-        self.targets.append(formula)
-
-    def json(self) -> str:
-        """produce a JSON representation of this graph"""
-        return json.dumps({
-            'nodes': self.nodes,
-            'sources': self.sources,
-            'targets': self.targets,
-            'entries': self.entries,
-            'pairs': self.pairs
-        })
+        cache = {}
+        self._marked(Node.ENTRY, cache, entry)
+        self._marked(Node.GOAL, cache, goal)
 
     def torch(self) -> Data:
         """produce a Torch representation of this graph"""
@@ -76,15 +41,21 @@ class Graph:
             edge_index = torch.tensor([
                 self.sources + self.targets,
                 self.targets + self.sources
-            ]),
-            entry_index = torch.tensor(self.entries),
-            pairs = torch.tensor(self.pairs)
+            ])
         )
 
-    def _formula(self, f: F) -> int:
+    def _marked(self, label: Node, cache: dict[F, int], entry: F):
+        """add a marked formula to the graph"""
+        formula = self._formula(cache, entry)
+        node = len(self.nodes)
+        self.nodes.append(label)
+        self.sources.append(node)
+        self.targets.append(formula)
+
+    def _formula(self, cache: dict[F, int], f: F) -> int:
         """add a formula to the graph"""
-        if f in self.cache:
-            return self.cache[f]
+        if f in cache:
+            return cache[f]
 
         if isinstance(f, int):
             node = len(self.nodes)
@@ -93,8 +64,8 @@ class Graph:
             node = len(self.nodes)
             self.nodes.append(Node.FUN)
         else:
-            left = self._formula(f.left)
-            right = self._formula(f.right)
+            left = self._formula(cache, f.left)
+            right = self._formula(cache, f.right)
             node = len(self.nodes)
             self.nodes.append(Node.C1)
             self.nodes.append(Node.C2)
@@ -105,5 +76,5 @@ class Graph:
             self.sources.append(node)
             self.targets.append(right)
 
-        self.cache[f] = node
+        cache[f] = node
         return node

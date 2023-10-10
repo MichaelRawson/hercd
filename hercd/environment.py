@@ -3,6 +3,8 @@ import random
 from typing import Optional
 
 import torch
+from torch import Tensor
+from torch_geometric.data import Batch, Data
 
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import STEP_LIMIT, EPSILON
@@ -41,14 +43,18 @@ class Environment:
     goal: F
     """problem goal"""
     model: Optional[Model]
-    """policy network - if None, apply a uniform policy"""
-    silent: bool
+    """embedding network for policy - if None, apply a uniform policy"""
+    chatty: bool
     """whether to be chatty or not"""
     known: list[Entry]
     """known deductions so far this episode, in chronological order"""
+    major_embeddings: list[Tensor]
+    """major embeddings for each entry"""
+    minor_embeddings: list[Tensor]
+    """minor embeddings for each entry"""
     seen: set[F]
-    """formulas we've already seen this episode"""
-    log: list[tuple[F, tuple[Entry]]]
+    """inferences we've already seen this episode"""
+    log: list[tuple[Entry, Entry]]
     """list of deductions made this episode, in chronological order"""
     recording: bool
     """whether we should append to `log`"""
@@ -59,12 +65,14 @@ class Environment:
         self.axioms = axioms
         self.goal = goal
         self.model = None
-        self.silent = False
+        self.chatty = False
         self.reset()
 
     def reset(self):
         """reinitialise the environment, copying axioms to `known`"""
         self.known = []
+        self.major_embeddings = []
+        self.minor_embeddings = []
         self.seen = set()
         self.log = []
         self.proof = None
@@ -80,20 +88,22 @@ class Environment:
         if self.model:
             self.model.eval()
 
-        prediction = None
+        weights = None
         while self.proof is None and len(self.known) < STEP_LIMIT:
-            if self.model and random.random() > EPSILON:
-                if prediction is None:
-                    graph = self.graph(self.goal).torch().to('cuda')
-                    with torch.no_grad():
-                        prediction = torch.sigmoid(self.model(graph))
-                weights = prediction.view(len(self.known) * len(self.known)).tolist()
-                choice = random.choices(range(len(self.known) * len(self.known)), weights=weights, k=1)[0]
-                first = self.known[choice // len(self.known)]
-                second = self.known[choice % len(self.known)]
-            else:
-                first, second = random.choices(self.known, k=2)
+            num_choices = len(self.known) * len(self.known)
+            if weights is None:
+                if self.model:
+                    major_embeddings = torch.cat(self.major_embeddings)
+                    minor_embeddings = torch.cat(self.minor_embeddings)
+                    inner = major_embeddings @ minor_embeddings.T
+                    probs = torch.sigmoid(inner)
+                    weights = probs.view(num_choices).tolist()
+                else:
+                    weights = [1.0] * num_choices
 
+            choice = random.choices(range(num_choices), weights=weights, k=1)[0]
+            first = self.known[choice // len(self.known)]
+            second = self.known[choice % len(self.known)]
             major = first.formula
             minor = second.formula
             if not isinstance(major, C):
@@ -104,54 +114,32 @@ class Environment:
                 continue
 
             if self._add(new, first, second):
-                prediction = None
+                weights = None
+            else:
+                weights[choice] = 0.0
 
         return self.proof is not None
 
-    def training_graphs(self) -> Generator[Graph, None, None]:
+    def training_graphs(self) -> Generator[tuple[Graph, Graph, bool], None, None]:
         """generate graphs for training based on the previous episode"""
 
         # find what we're aiming for
         target = self.proof if self.proof is not None else max(self.known, key=lambda entry: entry.tree_size)
         assert target is not None
 
-        # all the _inferences_ we need for `target`
+        # all the inferences we need for `target`
         inferences = {
             entry.parents
             for entry in target.ancestors()
             if entry.parents
         }
 
-        # copy self.log because it's about to be clobbered
-        log = self.log
-        self.reset()
-
-        for formula, parents in log:
-            # get the current graph
-            graph = self.graph(target.formula)
-
-            # work out which entries in `inferences` exist yet
-            formula2index = {
-                entry.formula: index
-                for index, entry in enumerate(self.known)
-            }
-            # add the available pairs to the graph
-            for first, second in inferences:
-                major = first.formula
-                minor = second.formula
-                if major in formula2index and minor in formula2index:
-                    graph.pairs.append((formula2index[major], formula2index[minor]))
-
-            yield graph
-            # add the formula only after so we get the state _before_ we did something
-            self._add(formula, *parents)
-
-    def graph(self, target: F) -> Graph:
-        """generate a graph representing the current state"""
-        graph = Graph(target)
-        for entry in self.known:
-            graph.entry(entry.formula)
-        return graph
+        # all the (major, minor) pairs and whether they appear in the proof of `target`
+        for first, second in self.log:
+            major = Graph(first.formula, target.formula)
+            minor = Graph(second.formula, target.formula)
+            y = (first, second) in inferences
+            yield (major, minor, y)
 
     def _add(self, formula: F, *parents: Entry) -> bool:
         """try to add `formula` to `known`"""
@@ -166,15 +154,18 @@ class Environment:
                 return False
 
         # `formula` will be retained at this point
-        if not self.silent:
+        if self.chatty:
             print(len(self.known), formula)
         if self.recording:
-            self.log.append((formula, parents))
+            self.log.append(parents)
 
         # backwards subsumption
         for index in reversed(range(len(self.known))):
             if match(formula, self.known[index].formula):
                 del self.known[index]
+                if self.model:
+                    del self.major_embeddings[index]
+                    del self.minor_embeddings[index]
 
         entry = Entry(
             formula,
@@ -182,8 +173,16 @@ class Environment:
         )
         if match(formula, self.goal):
             self.proof = entry
-            if not self.silent:
+            if self.chatty:
                 print("proof!")
 
         self.known.append(entry)
+        if self.model:
+            graph = Graph(entry.formula, self.goal).torch()
+            batch = Batch.from_data_list([graph]).to('cuda')
+            assert isinstance(batch, Data)
+            with torch.no_grad():
+                major, minor = self.model(batch, batch)
+            self.major_embeddings.append(major)
+            self.minor_embeddings.append(minor)
         return True
