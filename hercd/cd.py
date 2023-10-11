@@ -9,7 +9,7 @@ F = Union[str, int, 'C']
 def name(f: F) -> str:
     """a human-readable name for a formula"""
     if isinstance(f, C):
-        return repr(f)
+        return str(f)
     if isinstance(f, str):
         return f
     sign = '-' if f < 0 else ''
@@ -48,8 +48,11 @@ class C:
     def __eq__(self, other: F) -> bool:
         return id(self) == id(other) or isinstance(other, C) and self.left == other.left and self.right == other.right
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         return f'C{name(self.left)}{name(self.right)}'
+
+    def __repr__(self) -> str:
+        return f'c({repr(self.left)},{repr(self.right)})'
 
 @lru_cache(maxsize=CACHE_SIZE)
 def c(left: F, right: F) -> C:

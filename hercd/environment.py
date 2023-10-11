@@ -7,7 +7,7 @@ from torch import Tensor
 from torch_geometric.data import Batch, Data
 
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
-from .constants import STEP_LIMIT, EPSILON
+from .constants import STEP_LIMIT
 from .graph import Graph
 from .model import Model
 
@@ -91,31 +91,23 @@ class Environment:
         weights = None
         while self.proof is None and len(self.known) < STEP_LIMIT:
             num_choices = len(self.known) * len(self.known)
-            if weights is None:
-                if self.model:
-                    major_embeddings = torch.cat(self.major_embeddings)
-                    minor_embeddings = torch.cat(self.minor_embeddings)
-                    inner = major_embeddings @ minor_embeddings.T
-                    probs = torch.sigmoid(inner)
-                    weights = probs.view(num_choices).tolist()
-                else:
-                    weights = [1.0] * num_choices
+            if self.model and weights is None:
+                major_embeddings = torch.stack(self.major_embeddings, dim=0)
+                minor_embeddings = torch.stack(self.minor_embeddings, dim=1)
+                inner = major_embeddings @ minor_embeddings
+                probs = torch.sigmoid(inner)
+                weights = probs.view(num_choices)
 
-            choice = random.choices(range(num_choices), weights=weights, k=1)[0]
+            if weights is None:
+                choice = random.randrange(num_choices)
+            else:
+                choice = torch.multinomial(weights, 1)
+
             first = self.known[choice // len(self.known)]
             second = self.known[choice % len(self.known)]
-            major = first.formula
-            minor = second.formula
-            if not isinstance(major, C):
-                continue
-            try:
-                new = modus_ponens(major.left, major.right, minor)
-            except (NoUnifier, TooBig):
-                continue
-
-            if self._add(new, first, second):
+            if self._step(first, second):
                 weights = None
-            else:
+            elif weights is not None:
                 weights[choice] = 0.0
 
         return self.proof is not None
@@ -141,37 +133,49 @@ class Environment:
             y = (first, second) in inferences
             yield (major, minor, y)
 
-    def _add(self, formula: F, *parents: Entry) -> bool:
-        """try to add `formula` to `known`"""
-        # skip duplicates
-        if formula in self.seen:
+    def _step(self, first: Entry, second: Entry) -> bool:
+        """try a CD inference with `first` and `second` and add the result to `known`"""
+
+        major = first.formula
+        minor = second.formula
+        if not isinstance(major, C):
             return False
-        self.seen.add(formula)
+        try:
+            new = modus_ponens(major.left, major.right, minor)
+        except (NoUnifier, TooBig):
+            return False
+
+        return self._add(new, first, second)
+
+    def _add(self, new: F, *parents: Entry) -> bool:
+        """add `new` to `known`, recording its parents"""
+
+        # skip duplicates
+        if new in self.seen:
+            return False
+        self.seen.add(new)
 
         # forwards subsumption
         for known in self.known:
-            if match(known.formula, formula):
+            if match(known.formula, new):
                 return False
 
         # `formula` will be retained at this point
         if self.chatty:
-            print(len(self.known), formula)
+            print(len(self.known), new)
         if self.recording:
             self.log.append(parents)
 
         # backwards subsumption
         for index in reversed(range(len(self.known))):
-            if match(formula, self.known[index].formula):
+            if match(new, self.known[index].formula):
                 del self.known[index]
                 if self.model:
                     del self.major_embeddings[index]
                     del self.minor_embeddings[index]
 
-        entry = Entry(
-            formula,
-            parents,
-        )
-        if match(formula, self.goal):
+        entry = Entry(new, parents)
+        if match(new, self.goal):
             self.proof = entry
             if self.chatty:
                 print("proof!")
@@ -183,6 +187,6 @@ class Environment:
             assert isinstance(batch, Data)
             with torch.no_grad():
                 major, minor = self.model(batch, batch)
-            self.major_embeddings.append(major)
-            self.minor_embeddings.append(minor)
+            self.major_embeddings.append(major.view(-1))
+            self.minor_embeddings.append(minor.view(-1))
         return True

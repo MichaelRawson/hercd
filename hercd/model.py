@@ -5,9 +5,9 @@ from torch_geometric.data import Data
 from torch_geometric.nn import BatchNorm, GCNConv, global_mean_pool
 
 NODE_TYPES = 6
-CHANNELS = 8
+CHANNELS = 64
 CONVOLUTIONS = 8
-HIDDEN = 32
+HIDDEN = 128
 
 class Head(Module):
     """embedding network"""

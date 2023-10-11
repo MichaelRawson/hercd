@@ -45,7 +45,6 @@ class CDDataset(Dataset):
                     ),
                     torch.tensor(float(raw['y']))
                 ))
-        print('done')
         return CDDataset(data)
 
     def __len__(self):
@@ -87,6 +86,5 @@ def train_from_file(path: str):
             optimizer.step()
             optimizer.zero_grad()
             step += 1
-            if step % 128 == 0:
-                print(batch[2])
-                print(prediction)
+            if step % 1000 == 0:
+                writer.add_histogram('prediction', prediction, global_step=step)
