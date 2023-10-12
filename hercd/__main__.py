@@ -108,21 +108,28 @@ def learn():
 
         environment.model = model
         model.train()
-        episode_batches = 0
         dataset = CDDataset(experience)
-        while episode_batches < BATCHES:
+        best_loss = float('inf')
+        losses = []
+        while True:
             for major, minor, y in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
                 prediction, loss = forward(model, major, minor, y)
-                if episode_batches == 0:
-                    writer.add_histogram('prediction', prediction, global_step=total_episodes)
+                if len(losses) == 0:
+                    writer.add_histogram('prediction', prediction, global_step=total_batches)
                 loss.backward()
+                losses.append(float(loss))
                 writer.add_scalar('loss', loss.detach(), global_step=total_batches)
                 optimizer.step()
                 optimizer.zero_grad()
-                episode_batches += 1
                 total_batches += 1
-                if episode_batches >= BATCHES:
-                    break
+
+            new_loss = sum(losses) / len(losses)
+            losses.clear()
+            print(new_loss)
+            if new_loss < best_loss:
+                best_loss = new_loss
+            else:
+                break
 
 if __name__ == '__main__':
     random.seed(0)

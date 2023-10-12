@@ -11,7 +11,7 @@ from torch_geometric.data import Batch, Data
 
 from .model import Model
 
-ENTROPY_REGULARISATION = 0.1
+ENTROPY_REGULARISATION = 0.7
 BATCH_SIZE = 64
 
 class CDDataset(Dataset):
@@ -71,7 +71,7 @@ def forward(model: Model, major: Data, minor: Data, y: Tensor) -> tuple[Tensor, 
     logit = torch.sum(major_embedding * minor_embedding, dim=-1)
     xe = F.binary_cross_entropy_with_logits(logit, y)
     prediction = torch.sigmoid(logit)
-    entropy = (torch.log(prediction) * prediction).sum()
+    entropy = (torch.log(prediction) * prediction).mean()
     loss = xe + ENTROPY_REGULARISATION * entropy
     return prediction, loss
 
