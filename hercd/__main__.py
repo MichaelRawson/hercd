@@ -8,7 +8,7 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from .cd import F, c
-from .constants import BATCHES_PER_EPISODE, MAX_EXPERIENCE
+from .constants import BATCHES, EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
 from .model import Model
 from .train import BATCH_SIZE, CDDataset, forward, train_from_file
@@ -81,44 +81,48 @@ def learn():
 
     environment = Environment(AXIOMS, GOAL)
     environment.chatty = True
-    environment.model = model
     total_episodes = 0
     total_batches = 0
     while True:
-        environment.run()
-        total_episodes += 1
+        for _ in range(EPISODES):
+            environment.run()
+            total_episodes += 1
 
-        progress = sum(
-            known.formula in STEPS
-            for known in environment.known
-        )
-        writer.add_scalar('progress', progress, global_step=total_episodes)
+            progress = sum(
+                known.formula in STEPS
+                for known in environment.known
+            )
+            writer.add_scalar('progress', progress, global_step=total_episodes)
 
-        if environment.proof is not None:
-            writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
+            if environment.proof is not None:
+                writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
 
-        experience.extend((
-            (major.torch(), minor.torch(), torch.tensor(float(y))))
-            for major, minor, y in environment.training_graphs()
-        )
+            experience.extend((
+                (major.torch(), minor.torch(), torch.tensor(float(y))))
+                for major, minor, y in environment.training_graphs()
+            )
+
         random.shuffle(experience)
-        while len(experience) > MAX_EXPERIENCE:
+        while len(experience) > EXPERIENCE_BUFFER_LIMIT:
             experience.pop()
 
+        environment.model = model
         model.train()
         episode_batches = 0
         dataset = CDDataset(experience)
-        while episode_batches < BATCHES_PER_EPISODE:
+        while episode_batches < BATCHES:
             for major, minor, y in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
                 prediction, loss = forward(model, major, minor, y)
                 if episode_batches == 0:
                     writer.add_histogram('prediction', prediction, global_step=total_episodes)
                 loss.backward()
                 writer.add_scalar('loss', loss.detach(), global_step=total_batches)
-                episode_batches += 1
-                total_batches += 1
                 optimizer.step()
                 optimizer.zero_grad()
+                episode_batches += 1
+                total_batches += 1
+                if episode_batches >= BATCHES:
+                    break
 
 if __name__ == '__main__':
     random.seed(0)

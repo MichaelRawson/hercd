@@ -7,7 +7,7 @@ from torch import Tensor
 from torch_geometric.data import Batch, Data
 
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
-from .constants import STEP_LIMIT
+from .constants import FACT_LIMIT
 from .graph import Graph
 from .model import Model
 
@@ -89,7 +89,7 @@ class Environment:
             self.model.eval()
 
         weights = None
-        while self.proof is None and len(self.known) < STEP_LIMIT:
+        while self.proof is None and len(self.known) < FACT_LIMIT:
             num_choices = len(self.known) * len(self.known)
             if self.model and weights is None:
                 major_embeddings = torch.stack(self.major_embeddings, dim=0)
