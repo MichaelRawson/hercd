@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import atexit
+import gzip
 import json
 import random
 import torch
@@ -8,7 +10,7 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from .cd import F, c
-from .constants import BATCHES, EPISODES, EXPERIENCE_BUFFER_LIMIT
+from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
 from .model import Model
 from .train import BATCH_SIZE, CDDataset, forward, train_from_file
@@ -78,6 +80,15 @@ def learn():
     optimizer = Adam(model.parameters())
     writer = SummaryWriter()
     experience = []
+    save: list[str] = []
+
+    def save_on_exit():
+        print(f'saving {len(save)} data to save.jsonl.gz...')
+        with gzip.open('save.jsonl.gz', 'w') as f:
+            for line in save:
+                f.write(line.encode('ascii'))
+                f.write(b'\n')
+    atexit.register(save_on_exit)
 
     environment = Environment(AXIOMS, GOAL)
     environment.chatty = True
@@ -97,10 +108,13 @@ def learn():
             if environment.proof is not None:
                 writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
 
-            experience.extend((
-                (major.torch(), minor.torch(), torch.tensor(float(y))))
-                for major, minor, y in environment.training_graphs()
-            )
+            for major, minor, y in environment.training_graphs():
+                experience.append((major.torch(), minor.torch(), torch.tensor(float(y))))
+                save.append(json.dumps({
+                    'major': major.__dict__,
+                    'minor': minor.__dict__,
+                    'y': y
+                }))
 
         random.shuffle(experience)
         while len(experience) > EXPERIENCE_BUFFER_LIMIT:
