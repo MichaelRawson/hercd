@@ -3,13 +3,13 @@ from enum import IntEnum
 import torch
 from torch_geometric.data import Data
 
-from .cd import F
+from .cd import F, N
 
 class Node(IntEnum):
     """a node in a `Graph`"""
 
     VAR = 0
-    FUN = 1
+    N = 1
     C1 = 2
     C2 = 3
     ENTRY = 4
@@ -60,9 +60,12 @@ class Graph:
         if isinstance(f, int):
             node = len(self.nodes)
             self.nodes.append(Node.VAR)
-        elif isinstance(f, str):
+        elif isinstance(f, N):
+            negated = self._formula(cache, f.negated)
             node = len(self.nodes)
-            self.nodes.append(Node.FUN)
+            self.nodes.append(Node.N)
+            self.targets.append(negated)
+            self.sources.append(node)
         else:
             left = self._formula(cache, f.left)
             right = self._formula(cache, f.right)

@@ -3,23 +3,60 @@ from typing import Union
 
 from .constants import CACHE_SIZE, TERM_SIZE_LIMIT
 
-F = Union[str, int, 'C']
+F = Union[int, 'N', 'C']
 """a formula - constant (str), variable (int) or C"""
 
 def name(f: F) -> str:
     """a human-readable name for a formula"""
-    if isinstance(f, C):
+    if not isinstance(f, int):
         return str(f)
-    if isinstance(f, str):
-        return f
+
     sign = '-' if f < 0 else ''
     f = abs(f)
-    if f <= 26:
-        return sign + chr(ord('a') + f - 1)
-    return f'{sign}x{f}'
+    if f > 26:
+        return f'{sign}x{f}'
+
+    return sign + chr(ord('a') + f - 1)
 
 class TooBig(Exception):
     """a formula exceeded the size limit"""
+
+
+class N:
+    """a 'N' (negation) formula"""
+
+    negated: F
+    """the negated formula"""
+    size: int
+    """the tree size of the formula"""
+    hash: int
+    """a precomputed hash"""
+
+    def __init__(self, negated: F):
+        assert negated != 0
+        self.negated = negated
+        self.size = size(negated) + 1
+        if self.size > TERM_SIZE_LIMIT:
+            raise TooBig()
+        self.hash = hash((negated,))
+
+    def __hash__(self) -> int:
+        return self.hash
+
+    def __eq__(self, other: F) -> bool:
+        return id(self) == id(other) or isinstance(other, N) and self.negated == other.negated
+
+    def __str__(self) -> str:
+        return f'N{name(self.negated)}'
+
+    def __repr__(self) -> str:
+        return f'n({repr(self.negated)})'
+
+@lru_cache(maxsize=CACHE_SIZE)
+def n(negated: F) -> N:
+    """create a N with an LRU cache"""
+    return N(negated)
+
 
 class C:
     """a 'C' (implication) formula"""
@@ -59,67 +96,71 @@ def c(left: F, right: F) -> C:
     """create a C with an LRU cache"""
     return C(left, right)
 
+
 def size(f: F) -> int:
     """tree size of a formula"""
-    if isinstance(f, C):
-        return f.size
-    return 1
+    if isinstance(f, int):
+        return 1
+
+    return f.size
+
 
 @lru_cache(maxsize=CACHE_SIZE)
 def flip(f: F) -> F:
     """a formula with all its variables negated - useful for renaming"""
-    if isinstance(f, str):
-        return f
-    elif isinstance(f, int):
+    if isinstance(f, int):
         return -f
+    elif isinstance(f, N):
+        return n(flip(f.negated))
     else:
         return c(flip(f.left), flip(f.right))
 
 def rename(renaming: dict[int, int], target: F) -> F:
     """canonically rename `target`, using and mutating `renaming`"""
-    if isinstance(target, str):
-        return target
-    elif isinstance(target, int):
+    if isinstance(target, int):
         try:
             return renaming[target]
         except KeyError:
             fresh = len(renaming) + 1
             renaming[target] = fresh
             return fresh
+    elif isinstance(target, N):
+        return n(rename(renaming, target.negated))
     else:
         return c(rename(renaming, target.left), rename(renaming, target.right))
 
 @lru_cache(maxsize=CACHE_SIZE)
 def substitute(variable: int, formula: F, target: F) -> F:
     """substitute `variable` for `formula` in `target`"""
-    if isinstance(target, str):
-        return target
-    elif isinstance(target, int):
+    if isinstance(target, int):
         return formula if variable == target else target
-    else:
-        left = substitute(variable, formula, target.left)
-        right = substitute(variable, formula, target.right)
-        return c(left, right)
+    elif isinstance(target, N):
+        return n(substitute(variable, formula, target.negated))
+
+    left = substitute(variable, formula, target.left)
+    right = substitute(variable, formula, target.right)
+    return c(left, right)
 
 
 def apply(subst: dict[int, F], target: F) -> F:
     """apply `subst` to `target`"""
-    if isinstance(target, str):
-        return target
-    elif isinstance(target, int):
+    if isinstance(target, int):
         return subst.get(target, target)
-    else:
-        left = apply(subst, target.left)
-        right = apply(subst, target.right)
-        return c(left, right)
+    elif isinstance(target, N):
+        return n(apply(subst, target.negated))
+
+    left = apply(subst, target.left)
+    right = apply(subst, target.right)
+    return c(left, right)
 
 @lru_cache(maxsize=CACHE_SIZE)
 def occurs(x: int, f: F) -> bool:
     """true if x occurs in F"""
-    if isinstance(f, str):
-        return False
     if isinstance(f, int):
         return x == f
+    elif isinstance(f, N):
+        return occurs(x, f.negated)
+
     return occurs(x, f.left) or occurs(x, f.right)
 
 class NoUnifier(Exception):
@@ -139,6 +180,7 @@ def unify(left: F, right: F) -> dict[int, F]:
             right = subst[right]
         if left == right:
             continue
+
         if isinstance(left, int):
             right = apply(subst, right)
             if occurs(left, right):
@@ -148,9 +190,10 @@ def unify(left: F, right: F) -> dict[int, F]:
             subst[left] = right
         elif isinstance(right, int):
             todo.add((right, left))
-        elif isinstance(left, str):
-            if left != right:
+        elif isinstance(left, N):
+            if not isinstance(right, N):
                 raise NoUnifier()
+            todo.add((left.negated, right.negated))
         elif not isinstance(right, C):
             raise NoUnifier()
         else:
@@ -173,9 +216,10 @@ def match(left: F, right: F) -> bool:
                     return False
             else:
                 match[left] = right
-        elif isinstance(left, str):
-            if left != right:
+        elif isinstance(left, N):
+            if not isinstance(right, N):
                 return False
+            todo.add((left.negated, right.negated))
         elif not isinstance(right, C):
             return False
         else:
