@@ -1,12 +1,13 @@
 import gzip
 import json
+from typing import Optional
 
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
-from torch.optim import Adam
+from torch.optim import Optimizer, Adam
 from torch_geometric.data import Batch, Data
 
 from .model import Model
@@ -75,21 +76,25 @@ def forward(model: Model, major: Data, minor: Data, y: Tensor) -> tuple[Tensor, 
     loss = xe + ENTROPY_REGULARISATION * entropy
     return prediction, loss
 
-def train_from_file(path: str):
-    """train a model from data provided in `path`"""
-    dataset = CDDataset.from_file(path)
-    model = Model().to('cuda')
-    optimizer = Adam(model.parameters())
-
-    step = 1
-    writer = SummaryWriter()
-    while True:
-        for batch in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
+def epoch(
+    model: Model,
+    optimizer: Optimizer,
+    dataset: CDDataset,
+    writer: SummaryWriter,
+    step: int,
+    losses: Optional[list[float]] = None
+) -> int:
+    """train a `model` using `optimizer` from one pass through `dataset`"""
+    for batch in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
             prediction, loss = forward(model, *batch)
             loss.backward()
+            if losses is not None:
+                losses.append(float(loss))
             writer.add_scalar('loss', loss.detach(), global_step=step)
             optimizer.step()
             optimizer.zero_grad()
             step += 1
             if step % 1000 == 0:
                 writer.add_histogram('prediction', prediction, global_step=step)
+
+    return step

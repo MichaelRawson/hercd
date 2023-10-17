@@ -162,8 +162,8 @@ class Environment:
 
         # `formula` will be retained at this point
         if self.chatty:
-            print(len(self.known), new)
-        if self.recording:
+            print(len(self.known), tuple(self.known.index(parent) for parent in parents), repr(new))
+        if self.recording and len(self.known) > 1:
             self.log.append(parents)
 
         # backwards subsumption

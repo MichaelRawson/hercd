@@ -5,7 +5,6 @@ import json
 import random
 import torch
 
-from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
@@ -13,11 +12,9 @@ from .cd import F, n, c
 from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
 from .model import Model
-from .train import BATCH_SIZE, CDDataset, forward, train_from_file
+from .train import BATCH_SIZE, CDDataset, forward, epoch, train_from_file
 
-AXIOMS: list[F] = [
-    c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))
-]
+AXIOMS: list[F] = [c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))]
 
 GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
 
@@ -76,7 +73,7 @@ def baseline():
     environment.chatty = True
     writer = SummaryWriter()
     total_episodes = 0
-    while True:
+    if True:
         environment.run()
         total_episodes += 1
         progress = sum(
@@ -99,6 +96,20 @@ def generate():
                 'minor': minor.__dict__,
                 'y': y
             }))
+
+
+def train(path: str):
+    """offline-train a model from data provided in `path`"""
+    dataset = CDDataset.from_file(path)
+    model = Model().to('cuda')
+    model.train()
+    optimizer = Adam(model.parameters())
+
+    step = 1
+    writer = SummaryWriter()
+    while True:
+        step = epoch(model, optimizer, dataset, writer, step)
+
 
 def learn():
     """online-learning 'reinforcement' mode"""
@@ -153,20 +164,10 @@ def learn():
         best_loss = float('inf')
         losses = []
         while True:
-            for major, minor, y in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
-                prediction, loss = forward(model, major, minor, y)
-                if len(losses) == 0:
-                    writer.add_histogram('prediction', prediction, global_step=total_batches)
-                loss.backward()
-                losses.append(float(loss))
-                writer.add_scalar('loss', loss.detach(), global_step=total_batches)
-                optimizer.step()
-                optimizer.zero_grad()
-                total_batches += 1
-
+            total_batches = epoch(model, optimizer, dataset, writer, total_batches, losses)
             new_loss = sum(losses) / len(losses)
             losses.clear()
-            print(new_loss)
+            print("epoch loss: ", new_loss)
             if new_loss < best_loss:
                 best_loss = new_loss
             else:
@@ -182,7 +183,7 @@ if __name__ == '__main__':
     elif sys.argv[1] == 'generate':
         generate()
     elif sys.argv[1] == 'train':
-        train_from_file(sys.argv[2])
+        train(sys.argv[2])
     elif sys.argv[1] == 'learn':
         learn()
     else:
