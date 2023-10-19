@@ -5,14 +5,14 @@ import json
 import random
 import torch
 
-from torch.optim import Adam
+from torch.utils.data import random_split
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from .cd import F, n, c
 from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
 from .model import Model
-from .train import BATCH_SIZE, CDDataset, forward, epoch, train_from_file
+from .train import CDDataset, create_optimizer, validate, epoch
 
 AXIOMS: list[F] = [c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))]
 
@@ -80,10 +80,10 @@ def baseline():
             known.formula in STEPS
             for known in environment.known
         )
-        writer.add_scalar('progress', progress, global_step=total_episodes)
+        writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
         if environment.proof is not None:
-            writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
+            writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
 
 def generate():
     """uniform-policy mode, but output training data"""
@@ -101,21 +101,22 @@ def generate():
 def train(path: str):
     """offline-train a model from data provided in `path`"""
     dataset = CDDataset.from_file(path)
+    train, test = random_split(dataset, [.95, .05])
     model = Model().to('cuda')
-    model.train()
-    optimizer = Adam(model.parameters())
+    optimizer = create_optimizer(model)
 
     step = 1
     writer = SummaryWriter()
     while True:
-        step = epoch(model, optimizer, dataset, writer, step)
+        step, _ = epoch(model, optimizer, train, writer, step)
+        validate(model, test, writer, step)
 
 
 def learn():
     """online-learning 'reinforcement' mode"""
 
     model = Model().to('cuda')
-    optimizer = Adam(model.parameters())
+    optimizer = create_optimizer(model)
     writer = SummaryWriter()
     experience = []
     save: list[str] = []
@@ -141,10 +142,10 @@ def learn():
                 known.formula in STEPS
                 for known in environment.known
             )
-            writer.add_scalar('progress', progress, global_step=total_episodes)
+            writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
             if environment.proof is not None:
-                writer.add_scalar('steps to proof', len(environment.known), global_step=total_episodes)
+                writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
 
             for major, minor, y in environment.training_graphs():
                 experience.append((major.torch(), minor.torch(), torch.tensor(float(y))))
@@ -159,14 +160,10 @@ def learn():
             experience.pop()
 
         environment.model = model
-        model.train()
         dataset = CDDataset(experience)
         best_loss = float('inf')
-        losses = []
         while True:
-            total_batches = epoch(model, optimizer, dataset, writer, total_batches, losses)
-            new_loss = sum(losses) / len(losses)
-            losses.clear()
+            total_batches, new_loss = epoch(model, optimizer, dataset, writer, total_batches)
             print("epoch loss: ", new_loss)
             if new_loss < best_loss:
                 best_loss = new_loss

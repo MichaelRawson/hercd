@@ -1,19 +1,20 @@
 import gzip
 import json
-from typing import Optional
 
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
-from torch.optim import Optimizer, Adam
+from torch.optim import Optimizer, AdamW
 from torch_geometric.data import Batch, Data
 
 from .model import Model
 
-ENTROPY_REGULARISATION = 0.7
 BATCH_SIZE = 64
+LR = 0.01
+MOMENTUM = 0.9
+WEIGHT_DECAY = 0.0001
 
 class CDDataset(Dataset):
     """a dataset based on gzipped JSON lines"""
@@ -70,31 +71,64 @@ def forward(model: Model, major: Data, minor: Data, y: Tensor) -> tuple[Tensor, 
     y = y.to('cuda')
     major_embedding, minor_embedding = model(major, minor)
     logit = torch.sum(major_embedding * minor_embedding, dim=-1)
-    xe = F.binary_cross_entropy_with_logits(logit, y)
     prediction = torch.sigmoid(logit)
-    entropy = (torch.log(prediction) * prediction).mean()
-    loss = xe + ENTROPY_REGULARISATION * entropy
+    loss = F.binary_cross_entropy_with_logits(logit, y)
     return prediction, loss
+
+def create_optimizer(model: Model) -> Optimizer:
+    """make an optimiser for `model`"""
+    return AdamW(model.parameters(), amsgrad=True)
+
+def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
+    """evaluate `model` on `dataset`"""
+
+    model.eval()
+    truth = []
+    predictions = []
+    losses = []
+    for batch in DataLoader(
+        dataset,
+        collate_fn=CDDataset.collate,
+        batch_size=BATCH_SIZE
+    ):
+        truth.append(batch[2])
+        with torch.no_grad():
+            prediction, loss = forward(model, *batch)
+        predictions.append(prediction)
+        losses.append(loss)
+
+    truth = torch.cat(truth)
+    prediction = torch.cat(predictions)
+    loss = torch.tensor(losses).mean()
+    writer.add_histogram('validation/prediction', prediction, global_step=step)
+    writer.add_pr_curve('validation/pr', truth, prediction, global_step=step)
+    writer.add_scalar('validation/loss', loss, global_step=step)
+
 
 def epoch(
     model: Model,
     optimizer: Optimizer,
-    dataset: CDDataset,
+    dataset: Dataset,
     writer: SummaryWriter,
-    step: int,
-    losses: Optional[list[float]] = None
-) -> int:
+    step: int
+) -> tuple[int, float]:
     """train a `model` using `optimizer` from one pass through `dataset`"""
-    for batch in DataLoader(dataset, collate_fn=CDDataset.collate, batch_size=BATCH_SIZE, shuffle=True):
-            prediction, loss = forward(model, *batch)
-            loss.backward()
-            if losses is not None:
-                losses.append(float(loss))
-            writer.add_scalar('loss', loss.detach(), global_step=step)
-            optimizer.step()
-            optimizer.zero_grad()
-            step += 1
-            if step % 1000 == 0:
-                writer.add_histogram('prediction', prediction, global_step=step)
 
-    return step
+    model.train()
+    losses = []
+    for batch in DataLoader(
+        dataset,
+        collate_fn=CDDataset.collate,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        drop_last=True
+    ):
+        _, loss = forward(model, *batch)
+        loss.backward()
+        losses.append(float(loss))
+        writer.add_scalar('train/loss', loss.detach(), global_step=step)
+        optimizer.step()
+        optimizer.zero_grad()
+        step += 1
+
+    return step, sum(losses) / len(losses)
