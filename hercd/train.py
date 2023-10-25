@@ -111,11 +111,10 @@ def epoch(
     dataset: Dataset,
     writer: SummaryWriter,
     step: int
-) -> tuple[int, float]:
+) -> int:
     """train a `model` using `optimizer` from one pass through `dataset`"""
 
     model.train()
-    losses = []
     for batch in DataLoader(
         dataset,
         collate_fn=CDDataset.collate,
@@ -125,10 +124,9 @@ def epoch(
     ):
         _, loss = forward(model, *batch)
         loss.backward()
-        losses.append(float(loss))
         writer.add_scalar('train/loss', loss.detach(), global_step=step)
         optimizer.step()
         optimizer.zero_grad()
         step += 1
 
-    return step, sum(losses) / len(losses)
+    return step

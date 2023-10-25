@@ -108,7 +108,7 @@ def train(path: str):
     step = 1
     writer = SummaryWriter()
     while True:
-        step, _ = epoch(model, optimizer, train, writer, step)
+        step = epoch(model, optimizer, train, writer, step)
         validate(model, test, writer, step)
 
 
@@ -156,19 +156,16 @@ def learn():
                 }))
 
         random.shuffle(experience)
+        random.shuffle(save)
         while len(experience) > EXPERIENCE_BUFFER_LIMIT:
             experience.pop()
+            save.pop()
 
         environment.model = model
         dataset = CDDataset(experience)
-        best_loss = float('inf')
-        while True:
-            total_batches, new_loss = epoch(model, optimizer, dataset, writer, total_batches)
-            print("epoch loss: ", new_loss)
-            if new_loss < best_loss:
-                best_loss = new_loss
-            else:
-                break
+        train, test = random_split(dataset, [.95, .05])
+        total_batches = epoch(model, optimizer, train, writer, total_batches)
+        validate(model, test, writer, total_batches)
 
 if __name__ == '__main__':
     random.seed(0)
