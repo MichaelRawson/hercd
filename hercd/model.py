@@ -2,16 +2,16 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn import Embedding, Linear, Module, ModuleList
-import torch_geometric
-from torch_geometric.data import Data
+from torch_geometric.data import Batch, Data
 from torch_geometric.nn import InstanceNorm, GINConv, global_max_pool
+
+from .graph import Graph
 
 NODE_TYPES = 6
 CHANNELS = 32
 GIN_HIDDEN = 64
 CONVOLUTIONS = 8
 HIDDEN = 64
-OUTPUT = 32
 
 class GINApproximator(Module):
     """MLP for the GIN"""
@@ -31,8 +31,8 @@ class GINApproximator(Module):
         x = F.relu_(x)
         return self.output(x)
 
-class Head(Module):
-    """embedding network"""
+class Model(Module):
+    """classification of graphs"""
 
     embedding: Embedding
     """node embedding"""
@@ -43,6 +43,8 @@ class Head(Module):
     hidden: Linear
     """hidden layer"""
     output: Linear
+
+    cache: dict[Graph, float]
 
     def __init__(self):
         super().__init__()
@@ -56,7 +58,8 @@ class Head(Module):
             for _ in range(CONVOLUTIONS)
         ])
         self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS, HIDDEN)
-        self.output = Linear(HIDDEN, OUTPUT)
+        self.output = Linear(HIDDEN, 1)
+        self.cache = {}
 
     def forward(self, graph: Data) -> Tensor:
         x = graph.x
@@ -70,20 +73,17 @@ class Head(Module):
         xs = torch.cat(xs, dim=1)
         x = global_max_pool(xs, batch)
         x = F.relu_(self.hidden(x))
-        return self.output(x)
+        return self.output(x).view(-1)
 
-class Model(Module):
-    """embedding of major/minor pairs"""
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.cache.clear()
 
-    major: Module
-    """major embedding"""
-    minor: Module
-    """minor embedding"""
+    def predict(self, graph: Graph) -> float:
+        if graph in self.cache:
+            return self.cache[graph]
 
-    def __init__(self):
-        super().__init__()
-        self.major = Head()
-        self.minor = Head()
-
-    def forward(self, major: Data, minor: Data) -> tuple[Tensor, Tensor]:
-        return self.major(major), self.minor(minor)
+        batch = Batch.from_data_list([graph.torch()]).to('cuda')
+        prediction = float(torch.sigmoid(self(batch)))
+        self.cache[graph] = prediction
+        return prediction

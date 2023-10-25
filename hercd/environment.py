@@ -2,10 +2,6 @@ from collections.abc import Generator
 import random
 from typing import Optional
 
-import torch
-from torch import Tensor
-from torch_geometric.data import Batch, Data
-
 from .cd import C, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import FACT_LIMIT
 from .graph import Graph
@@ -27,13 +23,10 @@ class Entry:
         self.tree_size = sum(parent.tree_size for parent in parents) + 1
 
     def ancestors(self) -> Generator['Entry', None, None]:
-        """this entry and all its parents, recursively"""
-        yield self
+        """this entry's parents and all their parents, recursively"""
         for parent in self.parents:
+            yield parent
             yield from parent.ancestors()
-
-    def __repr__(self):
-        return repr(self.formula)
 
 class Environment:
     """an environment for CD proofs"""
@@ -46,18 +39,12 @@ class Environment:
     """embedding network for policy - if None, apply a uniform policy"""
     chatty: bool
     """whether to be chatty or not"""
-    known: list[Entry]
-    """known deductions so far this episode, in chronological order"""
-    major_embeddings: list[Tensor]
-    """major embeddings for each entry"""
-    minor_embeddings: list[Tensor]
-    """minor embeddings for each entry"""
+    active: list[Entry]
+    """the active set"""
+    passive: list[Entry]
+    """the passive set"""
     seen: set[F]
-    """inferences we've already seen this episode"""
-    log: list[tuple[Entry, Entry]]
-    """list of deductions made this episode, in chronological order"""
-    recording: bool
-    """whether we should append to `log`"""
+    """formulae we've already seen this episode"""
     proof: Optional[Entry]
     """if not None, a proof of `goal` from `axioms`"""
 
@@ -70,123 +57,109 @@ class Environment:
 
     def reset(self):
         """reinitialise the environment, copying axioms to `known`"""
-        self.known = []
-        self.major_embeddings = []
-        self.minor_embeddings = []
+        self.active = []
+        self.passive = []
         self.seen = set()
         self.log = []
         self.proof = None
-        self.recording = False
         for axiom in self.axioms:
             self._add(axiom)
 
     def run(self) -> bool:
         """run an episode, returning True if we found a proof"""
         self.reset()
-        self.recording = True
 
         if self.model:
             self.model.eval()
 
-        weights = None
-        while self.proof is None and len(self.known) < FACT_LIMIT:
-            num_choices = len(self.known) * len(self.known)
-            if self.model and weights is None:
-                major_embeddings = torch.stack(self.major_embeddings, dim=0)
-                minor_embeddings = torch.stack(self.minor_embeddings, dim=1)
-                inner = major_embeddings @ minor_embeddings
-                probs = torch.sigmoid(inner)
-                weights = probs.view(num_choices)
-
-            if weights is None:
-                choice = random.randrange(num_choices)
-            else:
-                choice = torch.multinomial(weights, 1)
-
-            first = self.known[choice // len(self.known)]
-            second = self.known[choice % len(self.known)]
-            if self._step(first, second):
-                weights = None
-            elif weights is not None:
-                weights[choice] = 0.0
+        while self.proof is None and len(self.active) < FACT_LIMIT:
+            selected_index = self._select()
+            selected = self.passive.pop(selected_index)
+            self._activate(selected)
 
         return self.proof is not None
 
-    def training_graphs(self) -> Generator[tuple[Graph, Graph, bool], None, None]:
-        """generate graphs for training based on the previous episode"""
+    def training(self) -> tuple[F, set[F], set[F]]:
+        """produce a hindsight goal and positive/negative examples"""
 
         # find what we're aiming for
-        target = self.proof if self.proof is not None else max(self.known, key=lambda entry: entry.tree_size)
+        target = self.proof if self.proof is not None else max(self.passive, key=lambda entry: entry.tree_size)
         assert target is not None
 
-        # all the inferences we need for `target`
-        inferences = {
-            entry.parents
+        # positive examples are the ancestors of `target`
+        positive = {
+            entry.formula
             for entry in target.ancestors()
-            if entry.parents
+        }
+        # negatives are the rest
+        negative = {
+            entry.formula
+            for entry in self.active
+            if entry.formula not in positive
         }
 
-        # all the (major, minor) pairs and whether they appear in the proof of `target`
-        for first, second in self.log:
-            major = Graph(first.formula, target.formula)
-            minor = Graph(second.formula, target.formula)
-            y = (first, second) in inferences
-            yield (major, minor, y)
+        return target.formula, positive, negative
 
-    def _step(self, first: Entry, second: Entry) -> bool:
-        """try a CD inference with `first` and `second` and add the result to `known`"""
+    def _select(self) -> int:
+        """choose a passive clause and return its index"""
+        if self.model is None:
+            return random.randrange(len(self.passive))
 
-        major = first.formula
-        minor = second.formula
-        if not isinstance(major, C):
-            return False
-        try:
-            new = modus_ponens(major.left, major.right, minor)
-        except (NoUnifier, TooBig):
-            return False
+        # rejection sampling
+        while True:
+            candidate = random.randrange(len(self.passive))
+            graph = Graph(self.passive[candidate].formula, self.goal)
+            prediction = self.model.predict(graph)
+            threshold = random.random()
+            if threshold < prediction:
+                return candidate
 
-        return self._add(new, first, second)
+    def _activate(self, selected: Entry):
+        """activate `selected`"""
 
-    def _add(self, new: F, *parents: Entry) -> bool:
-        """add `new` to `known`, recording its parents"""
+        # forwards subsumption
+        for index in reversed(range(len(self.passive))):
+            if match(selected.formula, self.passive[index].formula):
+                del self.passive[index]
+
+        # subsume things in the active set
+        for index in reversed(range(len(self.active))):
+            if match(selected.formula, self.active[index].formula):
+                del self.active[index]
+
+        self.active.append(selected)
+        for other in self.active:
+            for major, minor in (selected.formula, other.formula), (other.formula, selected.formula):
+                if not isinstance(major, C):
+                    continue
+                try:
+                    new = modus_ponens(major.left, major.right, minor)
+                except (NoUnifier, TooBig):
+                    continue
+
+                self._add(new, other, selected)
+
+        if self.chatty:
+            print(len(self.active), selected.formula)
+
+    def _add(self, new: F, *parents: Entry):
+        """add `new` to `passive`, recording its parents"""
 
         # skip duplicates
         if new in self.seen:
-            return False
+            return
         self.seen.add(new)
 
         # forwards subsumption
-        for known in self.known:
-            if match(known.formula, new):
-                return False
-
-        # `formula` will be retained at this point
-        if self.chatty:
-            print(len(self.known), new)
-        if self.recording and len(self.known) > 1:
-            self.log.append(parents)
-
-        # backwards subsumption
-        for index in reversed(range(len(self.known))):
-            if match(new, self.known[index].formula):
-                del self.known[index]
-                if self.model:
-                    del self.major_embeddings[index]
-                    del self.minor_embeddings[index]
+        for other in self.active:
+            if match(other.formula, new):
+                return
 
         entry = Entry(new, parents)
         if match(new, self.goal):
             self.proof = entry
             if self.chatty:
                 print("proof!")
+            return
 
-        self.known.append(entry)
-        if self.model:
-            graph = Graph(entry.formula, self.goal).torch()
-            batch = Batch.from_data_list([graph]).to('cuda')
-            assert isinstance(batch, Data)
-            with torch.no_grad():
-                major, minor = self.model(batch, batch)
-            self.major_embeddings.append(major.view(-1))
-            self.minor_embeddings.append(minor.view(-1))
-        return True
+        self.passive.append(entry)

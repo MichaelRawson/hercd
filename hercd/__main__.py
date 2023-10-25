@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import atexit
+import gc
 import gzip
 import json
 import random
@@ -11,6 +12,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from .cd import F, n, c
 from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
+from .graph import Graph
 from .model import Model
 from .train import CDDataset, create_optimizer, validate, epoch
 
@@ -73,29 +75,29 @@ def baseline():
     environment.chatty = True
     writer = SummaryWriter()
     total_episodes = 0
-    if True:
+    while True:
         environment.run()
         total_episodes += 1
-        progress = sum(
-            known.formula in STEPS
-            for known in environment.known
-        )
+        known = environment.active + environment.passive
+        progress = sum(entry.formula in STEPS for entry in known)
+        _, positive, _ = environment.training()
+        writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
-
         if environment.proof is not None:
-            writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
+            writer.add_scalar('proof/steps', len(environment.active), global_step=total_episodes)
+
 
 def generate():
     """uniform-policy mode, but output training data"""
     environment = Environment(AXIOMS, GOAL)
     while True:
         environment.run()
-        for major, minor, y in environment.training_graphs():
-            print(json.dumps({
-                'major': major.__dict__,
-                'minor': minor.__dict__,
-                'y': y
-            }))
+        target, positive, negative = environment.training()
+        for samples, y in (positive, 1.0), (negative, 0.0):
+            for sample in samples:
+                graph = Graph(sample, target)
+                graph.y = y
+                print(json.dumps(graph.__dict__))
 
 
 def train(path: str):
@@ -138,28 +140,27 @@ def learn():
             environment.run()
             total_episodes += 1
 
-            progress = sum(
-                known.formula in STEPS
-                for known in environment.known
-            )
+            known = environment.active + environment.passive
+            progress = sum(entry.formula in STEPS for entry in known)
+            target, positive, negative = environment.training()
+            writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
-
             if environment.proof is not None:
-                writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
+                writer.add_scalar('proof/steps', len(environment.active), global_step=total_episodes)
 
-            for major, minor, y in environment.training_graphs():
-                experience.append((major.torch(), minor.torch(), torch.tensor(float(y))))
-                save.append(json.dumps({
-                    'major': major.__dict__,
-                    'minor': minor.__dict__,
-                    'y': y
-                }))
+            for samples, y in (positive, 1.0), (negative, 0.0):
+                for sample in samples:
+                    graph = Graph(sample, target)
+                    graph.y = y
+                    experience.append(graph.torch())
+                    save.append(json.dumps(graph.__dict__))
 
         random.shuffle(experience)
         random.shuffle(save)
         while len(experience) > EXPERIENCE_BUFFER_LIMIT:
             experience.pop()
             save.pop()
+        gc.collect()
 
         environment.model = model
         dataset = CDDataset(experience)

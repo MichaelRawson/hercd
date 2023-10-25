@@ -19,10 +19,10 @@ WEIGHT_DECAY = 0.0001
 class CDDataset(Dataset):
     """a dataset based on gzipped JSON lines"""
 
-    data: list[tuple[Data, Data, Tensor]]
-    """major graph, minor graph, y"""
+    data: list[Data]
+    """list of graphs to be batched"""
 
-    def __init__(self, data: list[tuple[Data, Data, Tensor]]):
+    def __init__(self, data: list[Data]):
         self.data = data
 
     @staticmethod
@@ -31,23 +31,15 @@ class CDDataset(Dataset):
         with gzip.open(file, 'r') as stream:
             for line in stream:
                 raw = json.loads(line)
-                data.append((
-                    Data(
-                        x = torch.tensor(raw['major']['nodes']),
-                        edge_index = torch.tensor([
-                            raw['major']['sources'] + raw['major']['targets'],
-                            raw['major']['targets'] + raw['major']['sources']
-                        ])
-                    ),
-                    Data(
-                        x = torch.tensor(raw['minor']['nodes']),
-                        edge_index = torch.tensor([
-                            raw['minor']['sources'] + raw['minor']['targets'],
-                            raw['minor']['targets'] + raw['minor']['sources']
-                        ]),
-                    ),
-                    torch.tensor(float(raw['y']))
+                data.append(Data(
+                    x = torch.tensor(raw['nodes']),
+                    edge_index = torch.tensor([
+                        raw['sources'] + raw['targets'],
+                        raw['targets'] + raw['sources']
+                    ]),
+                    y = torch.tensor(float(raw['y']))
                 ))
+
         return CDDataset(data)
 
     def __len__(self):
@@ -57,22 +49,16 @@ class CDDataset(Dataset):
         return self.data[idx]
 
     @staticmethod
-    def collate(data: list[tuple[Data, Data, Tensor]]) -> tuple[Batch, Batch, Tensor]:
-        major = Batch.from_data_list([major for major, _, _ in data])
-        minor = Batch.from_data_list([minor for _, minor, _ in data])
-        y = torch.tensor([y for _, _, y in data])
-        assert isinstance(major, Batch) and isinstance(minor, Batch)
-        return major, minor, y
+    def collate(data):
+        batch = Batch.from_data_list(data)
+        return batch
 
-def forward(model: Model, major: Data, minor: Data, y: Tensor) -> tuple[Tensor, Tensor]:
+def forward(model: Model, batch: Data) -> tuple[Tensor, Tensor]:
     """compute the loss for this batch"""
-    major = major.to('cuda')
-    minor = minor.to('cuda')
-    y = y.to('cuda')
-    major_embedding, minor_embedding = model(major, minor)
-    logit = torch.sum(major_embedding * minor_embedding, dim=-1)
+    graph = batch.to('cuda')
+    logit = model(graph)
     prediction = torch.sigmoid(logit)
-    loss = F.binary_cross_entropy_with_logits(logit, y)
+    loss = F.binary_cross_entropy_with_logits(logit, batch.y)
     return prediction, loss
 
 def create_optimizer(model: Model) -> Optimizer:
@@ -91,9 +77,9 @@ def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
         collate_fn=CDDataset.collate,
         batch_size=BATCH_SIZE
     ):
-        truth.append(batch[2])
+        truth.append(batch.y)
         with torch.no_grad():
-            prediction, loss = forward(model, *batch)
+            prediction, loss = forward(model, batch)
         predictions.append(prediction)
         losses.append(loss)
 
@@ -122,7 +108,7 @@ def epoch(
         shuffle=True,
         drop_last=True
     ):
-        _, loss = forward(model, *batch)
+        _, loss = forward(model, batch)
         loss.backward()
         writer.add_scalar('train/loss', loss.detach(), global_step=step)
         optimizer.step()
