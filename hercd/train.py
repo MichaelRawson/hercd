@@ -33,10 +33,7 @@ class CDDataset(Dataset):
                 raw = json.loads(line)
                 data.append(Data(
                     x = torch.tensor(raw['nodes']),
-                    edge_index = torch.tensor([
-                        raw['sources'] + raw['targets'],
-                        raw['targets'] + raw['sources']
-                    ]),
+                    edge_index = torch.tensor([raw['sources'], raw['targets']]),
                     y = torch.tensor(float(raw['y']))
                 ))
 
@@ -55,8 +52,8 @@ class CDDataset(Dataset):
 
 def forward(model: Model, batch: Data) -> tuple[Tensor, Tensor]:
     """compute the loss for this batch"""
-    graph = batch.to('cuda')
-    logit = model(graph)
+    batch = batch.to('cuda')
+    logit = model(batch)
     prediction = torch.sigmoid(logit)
     loss = F.binary_cross_entropy_with_logits(logit, batch.y)
     return prediction, loss
@@ -105,8 +102,7 @@ def epoch(
         dataset,
         collate_fn=CDDataset.collate,
         batch_size=BATCH_SIZE,
-        shuffle=True,
-        drop_last=True
+        shuffle=True
     ):
         _, loss = forward(model, batch)
         loss.backward()
