@@ -4,8 +4,8 @@ import gc
 import gzip
 import json
 import random
-import torch
 
+import torch
 from torch.utils.data import random_split
 from torch.utils.tensorboard.writer import SummaryWriter
 
@@ -78,13 +78,12 @@ def baseline():
     while True:
         environment.run()
         total_episodes += 1
-        known = environment.active + environment.passive
-        progress = sum(entry.formula in STEPS for entry in known)
+        progress = sum(entry.formula in STEPS for entry in environment.known)
         _, positive, _ = environment.training()
         writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
         if environment.proof is not None:
-            writer.add_scalar('proof/steps', len(environment.active), global_step=total_episodes)
+            writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
 
 
 def generate():
@@ -121,7 +120,7 @@ def learn():
     optimizer = create_optimizer(model)
     writer = SummaryWriter()
     experience = []
-    save: list[str] = []
+    save = []
 
     def save_on_exit():
         print(f'saving {len(save)} data to save.jsonl.gz...')
@@ -140,13 +139,12 @@ def learn():
             environment.run()
             total_episodes += 1
 
-            known = environment.active + environment.passive
-            progress = sum(entry.formula in STEPS for entry in known)
+            progress = sum(entry.formula in STEPS for entry in environment.known)
             target, positive, negative = environment.training()
             writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
             if environment.proof is not None:
-                writer.add_scalar('proof/steps', len(environment.active), global_step=total_episodes)
+                writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
 
             for samples, y in (positive, 1.0), (negative, 0.0):
                 for sample in samples:

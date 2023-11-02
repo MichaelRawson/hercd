@@ -12,12 +12,12 @@ class Entry:
 
     formula: F
     """the formula that this entry proves"""
-    parents: tuple['Entry', 'Entry']
+    parents: tuple['Entry', ...]
     """premises - empty for axioms"""
     tree_size: int
     """the tree size of the deduction"""
 
-    def __init__(self, term: F, parents: tuple['Entry', 'Entry']):
+    def __init__(self, term: F, *parents: 'Entry'):
         self.formula = term
         self.parents = parents
         self.tree_size = sum(parent.tree_size for parent in parents) + 1
@@ -39,10 +39,8 @@ class Environment:
     """embedding network for policy - if None, apply a uniform policy"""
     chatty: bool
     """whether to be chatty or not"""
-    active: list[Entry]
-    """the active set"""
-    passive: list[Entry]
-    """the passive set"""
+    known: list[Entry]
+    """deduced so far"""
     seen: set[F]
     """formulae we've already seen this episode"""
     proof: Optional[Entry]
@@ -57,13 +55,11 @@ class Environment:
 
     def reset(self):
         """reinitialise the environment, copying axioms to `known`"""
-        self.active = []
-        self.passive = []
+        self.known = []
         self.seen = set()
-        self.log = []
         self.proof = None
         for axiom in self.axioms:
-            self._add(axiom)
+            self._add(Entry(axiom))
 
     def run(self) -> bool:
         """run an episode, returning True if we found a proof"""
@@ -72,10 +68,9 @@ class Environment:
         if self.model:
             self.model.eval()
 
-        while self.proof is None and len(self.active) < FACT_LIMIT:
-            selected_index = self._select()
-            selected = self.passive.pop(selected_index)
-            self._activate(selected)
+        while self.proof is None and len(self.known) < FACT_LIMIT:
+            new = self._step()
+            self._add(new)
 
         return self.proof is not None
 
@@ -83,7 +78,7 @@ class Environment:
         """produce a hindsight goal and positive/negative examples"""
 
         # find what we're aiming for
-        target = self.proof if self.proof is not None else max(self.passive, key=lambda entry: entry.tree_size)
+        target = self.proof if self.proof is not None else max(self.known, key=lambda entry: entry.tree_size)
         assert target is not None
 
         # positive examples are the ancestors of `target`
@@ -94,72 +89,62 @@ class Environment:
         # negatives are the rest
         negative = {
             entry.formula
-            for entry in self.active
+            for entry in self.known
             if entry.formula not in positive
         }
 
         return target.formula, positive, negative
 
-    def _select(self) -> int:
-        """choose a passive clause and return its index"""
-        if self.model is None:
-            return random.randrange(len(self.passive))
+    def _step(self) -> Entry:
+        """deduce a new entry from `self.known`"""
 
-        # rejection sampling
         while True:
-            candidate = random.randrange(len(self.passive))
-            graph = Graph(self.passive[candidate].formula, self.goal)
-            prediction = self.model.predict(graph)
-            threshold = random.random()
-            if threshold < prediction:
-                return candidate
+            # choose a random pair
+            major, minor = random.choice(self.known), random.choice(self.known)
 
-    def _activate(self, selected: Entry):
-        """activate `selected`"""
+            # see if they produce anything
+            if not isinstance(major.formula, C):
+                continue
+            try:
+                new = modus_ponens(major.formula.left, major.formula.right, minor.formula)
+            except (NoUnifier, TooBig):
+                continue
 
-        # forwards subsumption
-        for index in reversed(range(len(self.passive))):
-            if match(selected.formula, self.passive[index].formula):
-                del self.passive[index]
-
-        # subsume things in the active set
-        for index in reversed(range(len(self.active))):
-            if match(selected.formula, self.active[index].formula):
-                del self.active[index]
-
-        self.active.append(selected)
-        for other in self.active:
-            for major, minor in (selected.formula, other.formula), (other.formula, selected.formula):
-                if not isinstance(major, C):
-                    continue
-                try:
-                    new = modus_ponens(major.left, major.right, minor)
-                except (NoUnifier, TooBig):
+            # forwards subsumption
+            for other in self.known:
+                if match(other.formula, new):
                     continue
 
-                self._add(new, other, selected)
+            # rejection sampling
+            if self.model is not None:
+                graph = Graph(new, self.goal)
+                prediction = self.model.predict(graph)
+                threshold = random.random()
+                if threshold >= prediction:
+                    continue
 
-        if self.chatty:
-            print(len(self.active), selected.formula)
+            return Entry(new, major, minor)
 
-    def _add(self, new: F, *parents: Entry):
-        """add `new` to `passive`, recording its parents"""
+    def _add(self, new: Entry):
+        """add `new` to `self.known`, recording its parents"""
 
         # skip duplicates
-        if new in self.seen:
+        if new.formula in self.seen:
             return
-        self.seen.add(new)
+        self.seen.add(new.formula)
 
-        # forwards subsumption
-        for other in self.active:
-            if match(other.formula, new):
-                return
+        # backwards subsumption
+        for index in reversed(range(len(self.known))):
+            if match(new.formula, self.known[index].formula):
+                del self.known[index]
 
-        entry = Entry(new, parents)
-        if match(new, self.goal):
-            self.proof = entry
+        if self.chatty:
+            print(len(self.known), new.formula)
+
+        if match(new.formula, self.goal):
+            self.proof = new
             if self.chatty:
                 print("proof!")
             return
 
-        self.passive.append(entry)
+        self.known.append(new)
