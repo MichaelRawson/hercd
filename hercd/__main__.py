@@ -14,7 +14,7 @@ from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
 from .environment import Environment
 from .graph import Graph
 from .model import Model
-from .train import CDDataset, create_optimizer, validate, epoch
+from .train import CDDataset, create_optimizer, validate, validate_steps, epoch
 
 AXIOMS: list[F] = [c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))]
 
@@ -101,6 +101,7 @@ def generate():
 
 def train(path: str):
     """offline-train a model from data provided in `path`"""
+
     dataset = CDDataset.from_file(path)
     train, test = random_split(dataset, [.95, .05])
     model = Model().to('cuda')
@@ -134,6 +135,8 @@ def learn():
     environment.chatty = True
     total_episodes = 0
     total_batches = 0
+
+    steps = CDDataset([Graph(step, GOAL).torch() for step in STEPS])
     while True:
         for _ in range(EPISODES):
             environment.run()
@@ -165,6 +168,7 @@ def learn():
         train, test = random_split(dataset, [.95, .05])
         total_batches = epoch(model, optimizer, train, writer, total_batches)
         validate(model, test, writer, total_batches)
+        validate_steps(model, steps, writer, total_batches)
 
 if __name__ == '__main__':
     random.seed(0)

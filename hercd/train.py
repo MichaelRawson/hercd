@@ -81,11 +81,28 @@ def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
         losses.append(loss)
 
     truth = torch.cat(truth)
-    prediction = torch.cat(predictions)
+    distribution = torch.cat(predictions)
     loss = torch.tensor(losses).mean()
-    writer.add_histogram('validation/prediction', prediction, global_step=step)
-    writer.add_pr_curve('validation/pr', truth, prediction, global_step=step)
+    writer.add_histogram('validation/distribution', distribution, global_step=step)
+    writer.add_pr_curve('validation/pr', truth, distribution, global_step=step)
     writer.add_scalar('validation/loss', loss, global_step=step)
+
+def validate_steps(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
+    """evaluate `model` on steps of a proof"""
+
+    model.eval()
+    predictions = []
+    for batch in DataLoader(
+        dataset,
+        collate_fn=CDDataset.collate,
+        batch_size=BATCH_SIZE
+    ):
+        with torch.no_grad():
+            prediction, _ = forward(model, batch)
+        predictions.append(prediction)
+
+    distribution = torch.cat(predictions)
+    writer.add_histogram('steps/distribution', distribution, global_step=step)
 
 
 def epoch(
