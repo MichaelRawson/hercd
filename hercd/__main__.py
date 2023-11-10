@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import random_split
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from .cd import F, n, c
-from .constants import EPISODES, EXPERIENCE_BUFFER_LIMIT
+from .cd import Entry, F, n, c, D
+from .constants import EPISODES_PER_EPOCH, EXPERIENCE_BUFFER_LIMIT, SAMPLES_PER_EPISODE
 from .environment import Environment
 from .graph import Graph
 from .model import Model
@@ -20,54 +20,104 @@ AXIOMS: list[F] = [c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))]
 
 GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
 
-STEPS: set[F] = {
-    c(c(c(c(1,2),c(3,2)),c(2,4)),c(5,c(2,4))),
-    c(c(c(1,c(n(2),3)),4),c(2,4)),
-    c(c(c(1,1),2),c(3,2)),
-    c(1,c(2,c(3,3))),
-    c(c(c(1,c(2,2)),3),c(4,3)),
-    c(c(c(1,2),3),c(2,3)),
-    c(1,c(c(1,2),c(3,2))),
-    c(1,c(c(c(2,1),3),c(4,3))),
-    c(c(c(c(c(1,c(c(c(2,3),c(n(4),n(5))),4)),6),c(7,6)),2),c(5,2)),
-    c(c(c(1,2),c(3,c(c(c(2,4),c(n(5),n(1))),5))),c(6,c(3,c(c(c(2,4),c(n(5),n(1))),5)))),
-    c(1,c(c(c(2,3),4),c(c(c(3,5),c(n(4),n(2))),4))),
-    c(c(c(1,2),3),c(c(c(2,4),c(n(3),n(1))),3)),
-    c(c(c(1,2),c(n(c(c(c(3,1),4),c(5,4))),n(3))),c(c(c(3,1),4),c(5,4))),
-    c(c(c(c(c(1,c(2,3)),4),c(5,4)),2),c(6,2)),
-    c(c(c(1,2),c(n(c(3,1)),n(c(c(c(4,c(1,5)),6),c(7,6))))),c(3,1)),
-    c(1,c(c(c(2,c(c(3,4),5)),4),c(3,4))),
-    c(c(c(c(c(1,c(c(2,3),4)),3),c(2,3)),5),c(6,5)),
-    c(c(c(1,2),c(3,c(c(n(2),n(4)),5))),c(4,c(3,c(c(n(2),n(4)),5)))),
-    c(1,c(c(2,3),c(c(n(2),n(1)),3))),
-    c(c(1,2),c(c(n(1),n(c(3,c(4,c(5,5))))),2)),
-    c(c(n(c(c(1,c(2,2)),3)),n(c(4,c(5,c(6,6))))),c(7,3)),
-    c(c(c(1,n(c(c(2,c(3,3)),n(1)))),4),c(5,4)),
-    c(c(c(1,c(2,n(c(c(3,c(4,4)),n(2))))),5),c(6,5)),
-    c(c(c(1,2),3),c(c(c(4,c(5,5)),n(n(2))),3)),
-    c(c(c(1,c(2,2)),n(n(3))),c(c(3,4),c(5,4))),
-    c(c(c(c(1,2),c(3,2)),4),c(n(n(1)),4)),
-    c(c(c(c(c(c(1,2),c(3,2)),4),c(n(n(1)),4)),5),c(6,5)),
-    c(c(c(1,n(2)),c(c(2,3),c(4,3))),c(5,c(c(2,3),c(4,3)))),
-    c(c(c(c(c(1,2),c(3,2)),4),c(n(c(5,c(c(1,2),c(3,2)))),n(c(6,n(1))))),c(5,c(c(1,2),c(3,2)))),
-    c(c(n(c(1,c(c(2,3),c(4,3)))),n(c(5,n(2)))),c(1,c(c(2,3),c(4,3)))),
-    c(1,c(c(c(2,n(3)),c(4,5)),c(c(3,5),c(4,5)))),
-    c(c(c(1,n(2)),c(3,4)),c(c(2,4),c(3,4))),
-    c(c(1,c(2,3)),c(c(c(4,c(5,n(1))),3),c(2,3))),
-    c(c(c(1,c(2,n(c(c(3,4),5)))),5),c(4,5)),
-    c(c(c(1,2),3),c(c(c(4,1),2),3)),
-    c(c(c(1,c(2,n(c(c(3,4),5)))),5),c(c(c(6,3),4),5)),
-    c(c(c(c(c(1,2),3),4),5),c(c(c(2,3),4),5)),
-    c(c(c(1,c(2,n(3))),c(4,5)),c(c(3,5),c(4,5))),
-    c(c(1,c(2,3)),c(c(c(1,4),3),c(2,3))),
-    c(c(c(1,2),c(c(n(3),n(1)),4)),c(c(3,4),c(c(n(3),n(1)),4))),
-    c(c(1,2),c(c(n(1),n(c(2,3))),2)),
-    c(c(c(1,c(2,n(c(3,4)))),4),c(c(n(3),n(c(4,5))),4)),
-    c(c(c(c(n(1),n(c(2,3))),2),4),c(c(1,2),4)),
-    c(c(c(c(n(1),n(2)),1),3),c(c(3,4),c(2,4))),
-    c(c(c(n(1),2),3),c(c(3,4),c(1,4))),
-    c(c(1,2),c(c(2,3),c(1,3)))
-}
+S1 = Entry(AXIOMS[0])
+S2a = D(S1, S1)
+S2b = D(S1, S2a)
+S2 = D(S1, S2b)
+S3 = D(S2, S2)
+S4 = D(S1, S3)
+S5 = D(S1, S4)
+S6 = D(S5, S1)
+S7 = D(S5, S6)
+S8a = D(S1, S7)
+S8b = D(S1, S8a)
+S8c = D(S8b, S6)
+S8 = D(S8c, S1)
+S9 = D(S8, S6)
+S10a = D(S1, S9)
+S10 = D(S8, S10a)
+S11a = D(S4, S10)
+S11b = D(S1, S11a)
+S11c = D(S1, S11b)
+S11 = D(S11c, S1)
+S12a = D(S11, S3)
+S12b = D(S12a, S4)
+S12c = D(S9, S12b)
+S12d = D(S9, S12c)
+S12e = D(S1, S12d)
+S12f = D(S12e, S1)
+S12g = D(S1, S12f)
+S12h = D(S6, S12g)
+S12 = D(S1, S12h)
+S13a = D(S8, S12)
+S13b = D(S5, S13a)
+S13c = D(S12, S13b)
+S13d = D(S13c, S1)
+S13 = D(S13d, S7)
+S14a = D(S13, S5)
+S14b = D(S1, S14a)
+S14c = D(S13, S14b)
+S14 = D(S1, S14c)
+S15a = D(S13, S6)
+S15b = D(S15a, S9)
+S15c = D(S15b, S11)
+S15d = D(S15c, S10)
+S15e = D(S13, S15d)
+S15f = D(S1, S15e)
+S15g = D(S14, S1)
+S15h = D(S14, S15g)
+S15 = D(S15f, S15h)
+
+DEDUCTION: list[Entry] = [
+    S2a,
+    S2b,
+    S2,
+    S3,
+    S4,
+    S5,
+    S6,
+    S7,
+    S8a,
+    S8b,
+    S8c,
+    S8,
+    S9,
+    S10a,
+    S10,
+    S11a,
+    S11b,
+    S11c,
+    S11,
+    S12a,
+    S12b,
+    S12c,
+    S12d,
+    S12e,
+    S12f,
+    S12g,
+    S12h,
+    S12,
+    S13a,
+    S13b,
+    S13c,
+    S13d,
+    S13,
+    S14a,
+    S14b,
+    S14c,
+    S14,
+    S15a,
+    S15b,
+    S15c,
+    S15d,
+    S15e,
+    S15f,
+    S15g,
+    S15h,
+    S15
+]
+
+STEPS: set[F] = {entry.formula for entry in DEDUCTION}
 
 def baseline():
     """uniform-policy mode"""
@@ -79,24 +129,19 @@ def baseline():
         environment.run()
         total_episodes += 1
         progress = sum(entry.formula in STEPS for entry in environment.known)
-        _, positive, _ = environment.training()
-        writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
-        if environment.proof is not None:
-            writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
-
 
 def generate():
     """uniform-policy mode, but output training data"""
     environment = Environment(AXIOMS, GOAL)
     while True:
         environment.run()
-        target, positive, negative = environment.training()
-        for samples, y in (positive, 1.0), (negative, 0.0):
-            for sample in samples:
+        for _ in range(SAMPLES_PER_EPISODE):
+            target, positive, negative = environment.sample()
+            for y, sample in (1.0, positive), (0.0, negative):
                 graph = Graph(sample, target)
                 graph.y = y
-                print(json.dumps(graph.__dict__))
+                print(json.dumps(graph.__dict__, default=list))
 
 
 def train(path: str):
@@ -107,11 +152,13 @@ def train(path: str):
     model = Model().to('cuda')
     optimizer = create_optimizer(model)
 
+    steps = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
     step = 1
     writer = SummaryWriter()
     while True:
         step = epoch(model, optimizer, train, writer, step)
         validate(model, test, writer, step)
+        validate_steps(model, steps, writer, step)
 
 
 def learn():
@@ -136,25 +183,22 @@ def learn():
     total_episodes = 0
     total_batches = 0
 
-    steps = CDDataset([Graph(step, GOAL).torch() for step in STEPS])
+    steps = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
     while True:
-        for _ in range(EPISODES):
+        for _ in range(EPISODES_PER_EPOCH):
             environment.run()
             total_episodes += 1
 
             progress = sum(entry.formula in STEPS for entry in environment.known)
-            target, positive, negative = environment.training()
-            writer.add_scalar('proof/size', len(positive), global_step=total_episodes)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
-            if environment.proof is not None:
-                writer.add_scalar('proof/steps', len(environment.known), global_step=total_episodes)
 
-            for samples, y in (positive, 1.0), (negative, 0.0):
-                for sample in samples:
+            for _ in range(SAMPLES_PER_EPISODE):
+                target, positive, negative = environment.sample()
+                for y, sample in (1.0, positive), (0.0, negative):
                     graph = Graph(sample, target)
                     graph.y = y
                     experience.append(graph.torch())
-                    save.append(json.dumps(graph.__dict__))
+                    save.append(json.dumps(graph.__dict__, default=list))
 
         random.shuffle(experience)
         random.shuffle(save)

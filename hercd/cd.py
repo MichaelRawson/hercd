@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Union
+from typing import Generator, Optional, Union
 
 from .constants import CACHE_SIZE, TERM_SIZE_LIMIT
 
@@ -29,6 +29,8 @@ class N:
     """the negated formula"""
     size: int
     """the tree size of the formula"""
+    height: int
+    """the height of the formula"""
     hash: int
     """a precomputed hash"""
 
@@ -38,6 +40,7 @@ class N:
         self.size = size(negated) + 1
         if self.size > TERM_SIZE_LIMIT:
             raise TooBig()
+        self.height = height(negated) + 1
         self.hash = hash((negated,))
 
     def __hash__(self) -> int:
@@ -67,6 +70,8 @@ class C:
     """the right-hand side"""
     size: int
     """the tree size of the formula"""
+    height: int
+    """the height of the formula"""
     hash: int
     """a precomputed hash"""
 
@@ -77,6 +82,7 @@ class C:
         self.size = size(left) + size(right) + 1
         if self.size > TERM_SIZE_LIMIT:
             raise TooBig()
+        self.height = max(height(left), height(right)) + 1
         self.hash = hash((left, right))
 
     def __hash__(self) -> int:
@@ -103,6 +109,14 @@ def size(f: F) -> int:
         return 1
 
     return f.size
+
+
+def height(f: F) -> int:
+    """height of a formula"""
+    if isinstance(f, int):
+        return 1
+
+    return f.height
 
 
 @lru_cache(maxsize=CACHE_SIZE)
@@ -234,3 +248,58 @@ def modus_ponens(antecedent: F, consequent: F, target: F) -> F:
     subst = unify(antecedent, target)
     result = apply(subst, consequent)
     return rename({}, result)
+
+class Entry:
+    """a deduced formula and its proof"""
+
+    formula: F
+    """the formula that this entry proves"""
+    parents: tuple['Entry', ...]
+    """premises - empty for axioms"""
+
+    def __init__(self, term: F, *parents: 'Entry'):
+        self.formula = term
+        self.parents = parents
+
+    def ancestors(self, seen: Optional[set['Entry']] = None) -> Generator['Entry', None, None]:
+        """this entry's ancestors"""
+        for parent in self.parents:
+            if seen is not None:
+                if parent in seen:
+                    continue
+                else:
+                    seen.add(parent)
+
+            yield parent
+            yield from parent.ancestors(seen)
+
+    def derivation(self, seen: Optional[set['Entry']] = None) -> Generator['Entry', None, None]:
+        """this entry and its ancestors"""
+        yield self
+        yield from self.ancestors(seen)
+
+    def compacted_ancestors(self) -> Generator['Entry', None, None]:
+        """this entry's ancestors, without duplicates"""
+        seen = set()
+        yield from self.ancestors(seen)
+
+    def compacted_derivation(self) -> Generator['Entry', None, None]:
+        """this entry and its ancestors, without duplicates"""
+        seen = set()
+        yield from self.derivation(seen)
+
+    def tree_size(self) -> int:
+        return sum(1 for _ in self.derivation())
+
+    def compacted_size(self) -> int:
+        return sum(1 for _ in self.compacted_derivation())
+
+    def height(self) -> int:
+        return 1 + max((parent.height() for parent in self.parents), default=0)
+
+def D(left: Entry, right: Entry) -> Entry:
+    """manually write a proof as D-terms"""
+
+    assert isinstance(left.formula, C)
+    new = modus_ponens(left.formula.left, left.formula.right, right.formula)
+    return Entry(new, left, right)

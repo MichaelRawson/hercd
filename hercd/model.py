@@ -1,13 +1,15 @@
 import torch
 from torch import Tensor
-from torch.nn import functional as F
-from torch.nn import Embedding, Linear, Module, ModuleList
+from torch.nn.functional import relu_
+from torch.nn import Linear, Module, ModuleList
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import InstanceNorm, MessagePassing, global_max_pool
 
+from .cd import F, Entry
 from .graph import Graph
 
-NODE_TYPES = 6
+NODE_SIZE = 7
+META_SIZE = 7
 CHANNELS = 64
 GIN_HIDDEN = 256
 CONVOLUTIONS = 8
@@ -50,13 +52,13 @@ class DirectedGINConv(Module):
         back = self.back(x, edge_index)
         x = torch.cat((out, back), dim=-1)
         x = self.hidden(x)
-        x = F.relu_(x)
+        x = relu_(x)
         return self.output(x)
 
 class Model(Module):
     """classification of graphs"""
 
-    embedding: Embedding
+    embedding: Linear
     """node embedding"""
     bn: ModuleList
     """batch normalisation layers"""
@@ -66,11 +68,12 @@ class Model(Module):
     """hidden layer"""
     output: Linear
 
-    cache: dict[Graph, float]
+    cache: dict[F, float]
+    """cached results, reset on train()"""
 
     def __init__(self):
         super().__init__()
-        self.embedding = Embedding(NODE_TYPES, CHANNELS)
+        self.embedding = Linear(NODE_SIZE, CHANNELS)
         self.conv = ModuleList([
             DirectedGINConv()
             for _ in range(CONVOLUTIONS)
@@ -79,33 +82,36 @@ class Model(Module):
             InstanceNorm(CHANNELS)
             for _ in range(CONVOLUTIONS)
         ])
-        self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS, HIDDEN)
+        self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS + META_SIZE, HIDDEN)
         self.output = Linear(HIDDEN, 1)
         self.cache = {}
 
     def forward(self, graph: Data) -> Tensor:
         x = graph.x
         edge_index = graph.edge_index
+        meta = graph.meta
         batch = graph.batch
         x = self.embedding(x)
         xs = [x]
         for conv, norm in zip(self.conv, self.norm):
-            x = F.relu_(x + norm(conv(x, edge_index)))
+            x = relu_(x + norm(conv(x, edge_index)))
             xs.append(x)
         xs = torch.cat(xs, dim=1)
         x = global_max_pool(xs, batch)
-        x = F.relu_(self.hidden(x))
+        x = torch.cat((x, meta), dim=-1)
+        x = relu_(self.hidden(x))
         return self.output(x).view(-1)
 
     def train(self, mode: bool = True):
         super().train(mode)
         self.cache.clear()
 
-    def predict(self, graph: Graph) -> float:
-        if graph in self.cache:
-            return self.cache[graph]
+    def predict(self, entry: Entry, goal: F) -> float:
+        if entry.formula in self.cache:
+            return self.cache[entry.formula]
 
+        graph = Graph(entry, goal)
         batch = Batch.from_data_list([graph.torch()]).to('cuda')
         prediction = float(torch.sigmoid(self(batch)))
-        self.cache[graph] = prediction
+        self.cache[entry.formula] = prediction
         return prediction

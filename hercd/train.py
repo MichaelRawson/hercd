@@ -34,6 +34,7 @@ class CDDataset(Dataset):
                 data.append(Data(
                     x = torch.tensor(raw['nodes']),
                     edge_index = torch.tensor([raw['sources'], raw['targets']]),
+                    meta = torch.tensor([raw['meta']]),
                     y = torch.tensor(float(raw['y']))
                 ))
 
