@@ -68,7 +68,7 @@ class Model(Module):
     """hidden layer"""
     output: Linear
 
-    cache: dict[F, float]
+    cache: dict[tuple[F, F], float]
     """cached results, reset on train()"""
 
     def __init__(self):
@@ -107,11 +107,11 @@ class Model(Module):
         self.cache.clear()
 
     def predict(self, entry: Entry, goal: F) -> float:
-        if entry.formula in self.cache:
-            return self.cache[entry.formula]
+        if (entry.formula, goal) in self.cache:
+            return self.cache[(entry.formula, goal)]
 
         graph = Graph(entry, goal)
         batch = Batch.from_data_list([graph.torch()]).to('cuda')
         prediction = float(torch.sigmoid(self(batch)))
-        self.cache[entry.formula] = prediction
+        self.cache[(entry.formula, goal)] = prediction
         return prediction

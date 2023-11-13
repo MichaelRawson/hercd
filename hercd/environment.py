@@ -3,7 +3,6 @@ from typing import Optional
 
 from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import FACT_LIMIT
-from .graph import Graph
 from .model import Model
 
 class Environment:
@@ -57,23 +56,22 @@ class Environment:
 
         while True:
             target = random.choice(self.known)
-
             # positive examples are the ancestors of `target`
-            positive = {
+            positive = [
                 entry
                 for entry in target.compacted_ancestors()
-            }
+            ]
             # negatives are the rest
-            negative = {
+            negative = [
                 entry
                 for entry in self.known
                 if entry.formula not in positive
-            }
+            ]
             if not positive or not negative:
                 continue
 
-            positive = random.choice(list(positive))
-            negative = random.choice(list(negative))
+            positive = random.choice(positive)
+            negative = random.choice(negative)
             return target.formula, positive, negative
 
     def _step(self) -> Entry:
@@ -97,28 +95,29 @@ class Environment:
 
             # skip duplicates
             if new in self.seen:
+                self.cache.add((major.formula, minor.formula))
                 continue
 
             # forwards subsumption
             for other in self.known:
                 if match(other.formula, new):
                     self.cache.add((major.formula, minor.formula))
+                    self.seen.add(new)
                     continue
 
             entry = Entry(new, major, minor)
             # rejection sampling
             if self.model is not None:
                 prediction = self.model.predict(entry, self.goal)
-                threshold = random.random()
-                if threshold >= prediction:
-                    # don't add into cache here, might be selected later
+                if random.random() > prediction:
+                    # don't add to cache here, might be selected later
                     continue
 
+            self.seen.add(new)
             return entry
 
     def _add(self, new: Entry):
         """add `new` to `self.known`, recording its parents"""
-        self.seen.add(new.formula)
 
         # backwards subsumption
         for index in reversed(range(len(self.known))):

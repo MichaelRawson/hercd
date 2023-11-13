@@ -118,6 +118,7 @@ DEDUCTION: list[Entry] = [
 ]
 
 STEPS: set[F] = {entry.formula for entry in DEDUCTION}
+STEP_DATASET = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
 
 def baseline():
     """uniform-policy mode"""
@@ -152,13 +153,12 @@ def train(path: str):
     model = Model().to('cuda')
     optimizer = create_optimizer(model)
 
-    steps = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
     step = 1
     writer = SummaryWriter()
     while True:
         step = epoch(model, optimizer, train, writer, step)
         validate(model, test, writer, step)
-        validate_steps(model, steps, writer, step)
+        validate_steps(model, STEP_DATASET, writer, step)
 
 
 def learn():
@@ -183,7 +183,6 @@ def learn():
     total_episodes = 0
     total_batches = 0
 
-    steps = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
     while True:
         for _ in range(EPISODES_PER_EPOCH):
             environment.run()
@@ -192,7 +191,7 @@ def learn():
             progress = sum(entry.formula in STEPS for entry in environment.known)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
-            for _ in range(SAMPLES_PER_EPISODE):
+            for _ in range(SAMPLES_PER_EPISODE // 2):
                 target, positive, negative = environment.sample()
                 for y, sample in (1.0, positive), (0.0, negative):
                     graph = Graph(sample, target)
@@ -212,7 +211,7 @@ def learn():
         train, test = random_split(dataset, [.95, .05])
         total_batches = epoch(model, optimizer, train, writer, total_batches)
         validate(model, test, writer, total_batches)
-        validate_steps(model, steps, writer, total_batches)
+        validate_steps(model, STEP_DATASET, writer, total_batches)
 
 if __name__ == '__main__':
     random.seed(0)
