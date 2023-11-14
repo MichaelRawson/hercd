@@ -22,6 +22,8 @@ class Environment:
     """formulae we've already seen this episode"""
     cache: set[tuple[F, F]]
     """already tried an inference with these"""
+    predictions: int
+    """how many times we ran the model"""
 
     def __init__(self, axioms: list[F], goal: F):
         self.axioms = axioms
@@ -35,6 +37,7 @@ class Environment:
         self.known = []
         self.seen = set()
         self.cache = set()
+        self.predictions = 0
         for axiom in self.axioms:
             self._add(Entry(axiom))
 
@@ -108,11 +111,13 @@ class Environment:
             entry = Entry(new, major, minor)
             # rejection sampling
             if self.model is not None:
+                self.predictions += 1
                 prediction = self.model.predict(entry, self.goal)
                 if random.random() > prediction:
                     # don't add to cache here, might be selected later
                     continue
 
+            self.cache.add((major.formula, minor.formula))
             self.seen.add(new)
             return entry
 

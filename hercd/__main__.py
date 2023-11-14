@@ -188,6 +188,7 @@ def learn():
             environment.run()
             total_episodes += 1
 
+            writer.add_scalar('proof/predictions', environment.predictions, global_step=total_episodes)
             progress = sum(entry.formula in STEPS for entry in environment.known)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 

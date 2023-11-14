@@ -8,7 +8,7 @@ from torch_geometric.nn import InstanceNorm, MessagePassing, global_max_pool
 from .cd import F, Entry
 from .graph import Graph
 
-NODE_SIZE = 7
+NODE_SIZE = 6
 META_SIZE = 7
 CHANNELS = 64
 GIN_HIDDEN = 256

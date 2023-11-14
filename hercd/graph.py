@@ -19,8 +19,7 @@ def feature(flavour: int, goal: bool, tree_size: int, height: int) -> array:
     for i in range(Node.END):
         result.append(flavour == i)
     result.append(goal)
-    result.append(tree_size)
-    result.append(height)
+    result.append(float(height) / float(tree_size))
     return result
 
 class Graph:
@@ -50,13 +49,21 @@ class Graph:
         self.entry = str(entry.formula)
         self.goal = str(goal)
 
-        self.meta.append(entry.tree_size())
-        self.meta.append(entry.compacted_size())
-        self.meta.append(entry.height())
-        self.meta.append(size(entry.formula))
-        self.meta.append(height(entry.formula))
-        self.meta.append(size(goal))
-        self.meta.append(height(goal))
+        derivation_tree_size = float(entry.tree_size())
+        derivation_compacted_size = float(entry.compacted_size())
+        derivation_height = float(entry.height())
+        entry_height = float(height(entry.formula))
+        entry_size = float(size(entry.formula))
+        goal_height = float(height(goal))
+        goal_size = float(size(goal))
+
+        self.meta.append(derivation_compacted_size / derivation_tree_size)
+        self.meta.append(derivation_height / derivation_tree_size)
+        self.meta.append(derivation_height / derivation_compacted_size)
+        self.meta.append(entry_height / entry_size)
+        self.meta.append(goal_height / goal_size)
+        self.meta.append(entry_height / goal_height)
+        self.meta.append(entry_size / goal_size)
 
         cache = {}
         self._formula(cache, goal, goal=True)

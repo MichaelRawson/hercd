@@ -9,7 +9,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from torch.optim import Optimizer, AdamW
 from torch_geometric.data import Batch, Data
 
-from .constants import BATCH_SIZE, ENTROPY_REGULARISATION
+from .constants import BATCH_SIZE
 from .model import Model
 
 class CDDataset(Dataset):
@@ -51,10 +51,8 @@ def forward(model: Model, batch: Data) -> tuple[Tensor, Tensor]:
     """compute the loss for this batch"""
     batch = batch.to('cuda')
     logit = model(batch)
-    xe = F.binary_cross_entropy_with_logits(logit, batch.y)
+    loss = F.binary_cross_entropy_with_logits(logit, batch.y)
     prediction = torch.sigmoid(logit)
-    entropy = (prediction * F.logsigmoid(logit)).mean()
-    loss = xe + ENTROPY_REGULARISATION * entropy
     return prediction, loss
 
 def create_optimizer(model: Model) -> Optimizer:
