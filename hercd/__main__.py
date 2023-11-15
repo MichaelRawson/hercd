@@ -16,11 +16,11 @@ from .graph import Graph
 from .model import Model
 from .train import CDDataset, create_optimizer, validate, validate_steps, epoch
 
-AXIOMS: list[F] = [c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1)))]
+AXIOMS: list[Entry] = [Entry(c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1))))]
 
 GOAL: F = c(c(1,2),c(c(2,3),c(1,3)))
 
-S1 = Entry(AXIOMS[0])
+S1 = AXIOMS[0]
 S2a = D(S1, S1)
 S2b = D(S1, S2a)
 S2 = D(S1, S2b)
@@ -129,7 +129,7 @@ def baseline():
     while True:
         environment.run()
         total_episodes += 1
-        progress = sum(entry.formula in STEPS for entry in environment.known)
+        progress = sum(entry.formula in STEPS for entry in environment.active + environment.passive)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
 def generate():
@@ -188,8 +188,7 @@ def learn():
             environment.run()
             total_episodes += 1
 
-            writer.add_scalar('proof/predictions', environment.predictions, global_step=total_episodes)
-            progress = sum(entry.formula in STEPS for entry in environment.known)
+            progress = sum(entry.formula in STEPS for entry in environment.active + environment.passive)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
             for _ in range(SAMPLES_PER_EPISODE // 2):

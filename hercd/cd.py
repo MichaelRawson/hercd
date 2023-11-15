@@ -89,7 +89,7 @@ class C:
         return self.hash
 
     def __eq__(self, other: F) -> bool:
-        return id(self) == id(other) or isinstance(other, C) and self.left == other.left and self.right == other.right
+        return id(self) == id(other) or isinstance(other, C) and self.hash == other.hash and self.left == other.left and self.right == other.right
 
     def __str__(self) -> str:
         return f'C{name(self.left)}{name(self.right)}'

@@ -2,6 +2,7 @@ from array import array
 
 import torch
 from torch_geometric.data import Data
+from torch_geometric.data.data import BaseData
 
 from .cd import F, N, size, height
 from .environment import Entry
@@ -69,7 +70,7 @@ class Graph:
         self._formula(cache, goal, goal=True)
         self._formula(cache, entry.formula, goal=False)
 
-    def torch(self) -> Data:
+    def torch(self) -> BaseData:
         """produce a Torch representation of this graph"""
         return Data(
             x = torch.tensor(self.nodes),

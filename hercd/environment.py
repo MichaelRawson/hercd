@@ -1,6 +1,9 @@
 import random
 from typing import Optional
 
+import torch
+from torch.distributions.categorical import Categorical
+
 from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import FACT_LIMIT
 from .model import Model
@@ -8,24 +11,24 @@ from .model import Model
 class Environment:
     """an environment for CD proofs"""
 
-    axioms: list[F]
+    axioms: list[Entry]
     """problem axioms"""
     goal: F
     """problem goal"""
     model: Optional[Model]
     """embedding network for policy - if None, apply a uniform policy"""
     chatty: bool
-    """whether to be chatty or not"""
-    known: list[Entry]
-    """deduced so far"""
+    """whether to output progress or not"""
+    active: list[Entry]
+    """the active set"""
+    passive: list[Entry]
+    """the passive set"""
+    logits: list[float]
+    """associated logits for the passive set from the model"""
     seen: set[F]
     """formulae we've already seen this episode"""
-    cache: set[tuple[F, F]]
-    """already tried an inference with these"""
-    predictions: int
-    """how many times we ran the model"""
 
-    def __init__(self, axioms: list[F], goal: F):
+    def __init__(self, axioms: list[Entry], goal: F):
         self.axioms = axioms
         self.goal = goal
         self.model = None
@@ -34,101 +37,105 @@ class Environment:
 
     def reset(self):
         """reinitialise the environment, copying axioms to `known`"""
-        self.known = []
+        self.active = []
+        self.passive = []
+        self.logits = []
         self.seen = set()
-        self.cache = set()
-        self.predictions = 0
-        for axiom in self.axioms:
-            self._add(Entry(axiom))
+        self._add_to_passive(self.axioms)
 
     def run(self):
         """run an episode"""
         self.reset()
-
         if self.model:
             self.model.eval()
 
-        while len(self.known) < FACT_LIMIT:
-            new = self._step()
-            self._add(new)
-            if match(new.formula, self.goal):
-                assert False, "proof found!"
+        while len(self.active) < FACT_LIMIT:
+            self._activate(self._select())
 
     def sample(self) -> tuple[F, Entry, Entry]:
         """sample a hindsight goal and one positive/negative example"""
 
         while True:
-            target = random.choice(self.known)
+            target = random.choice(self.passive)
             # positive examples are the ancestors of `target`
-            positive = [
+            positive = {
                 entry
-                for entry in target.compacted_ancestors()
-            ]
+                for entry in target.ancestors()
+            }
             # negatives are the rest
             negative = [
                 entry
-                for entry in self.known
+                for entry in self.active
                 if entry.formula not in positive
             ]
             if not positive or not negative:
                 continue
 
-            positive = random.choice(positive)
+            positive = random.choice(list(positive))
             negative = random.choice(negative)
             return target.formula, positive, negative
 
-    def _step(self) -> Entry:
-        """deduce a new entry from `self.known`"""
+    def _select(self) -> Entry:
+        """choose an entry from `self.passive`"""
 
-        while True:
-            # choose a random pair
-            major, minor = random.choice(self.known), random.choice(self.known)
-            if (major.formula, minor.formula) in self.cache:
-                continue
+        index = 0
+        if self.model is None:
+            index = random.randrange(len(self.passive))
+        else:
+            assert len(self.logits) == len(self.passive)
+            logits = torch.tensor(self.logits)
+            distribution = Categorical(logits=logits)
+            index = distribution.sample()
 
-            # see if they produce anything
-            if not isinstance(major.formula, C):
-                self.cache.add((major.formula, minor.formula))
-                continue
-            try:
-                new = modus_ponens(major.formula.left, major.formula.right, minor.formula)
-            except (NoUnifier, TooBig):
-                self.cache.add((major.formula, minor.formula))
-                continue
+        if self.model is not None:
+            del self.logits[index]
+        return self.passive.pop(index)
 
-            # skip duplicates
-            if new in self.seen:
-                self.cache.add((major.formula, minor.formula))
-                continue
+    def _activate(self, given: Entry):
+        """activate `given`"""
 
-            # forwards subsumption
-            for other in self.known:
-                if match(other.formula, new):
-                    self.cache.add((major.formula, minor.formula))
-                    self.seen.add(new)
-                    continue
+        # re-check forward subsumption
+        for other in self.active:
+            if match(other.formula, given.formula):
+                return
 
-            entry = Entry(new, major, minor)
-            # rejection sampling
-            if self.model is not None:
-                self.predictions += 1
-                prediction = self.model.predict(entry, self.goal)
-                if random.random() > prediction:
-                    # don't add to cache here, might be selected later
-                    continue
+        # backward subsumption
+        for index in reversed(range(len(self.active))):
+            if match(given.formula, self.active[index].formula):
+                del self.active[index]
 
-            self.cache.add((major.formula, minor.formula))
-            self.seen.add(new)
-            return entry
-
-    def _add(self, new: Entry):
-        """add `new` to `self.known`, recording its parents"""
-
-        # backwards subsumption
-        for index in reversed(range(len(self.known))):
-            if match(new.formula, self.known[index].formula):
-                del self.known[index]
-
+        # we've committed to `given` now
+        self.active.append(given)
         if self.chatty:
-            print(len(self.known), new.formula)
-        self.known.append(new)
+            print(len(self.active), given.formula)
+
+        # do inference
+        unprocessed = []
+        for other in self.active:
+            for major, minor in (other, given), (given, other):
+                # see if they produce anything
+                if not isinstance(major.formula, C):
+                    continue
+                try:
+                    new = modus_ponens(major.formula.left, major.formula.right, minor.formula)
+                except (NoUnifier, TooBig):
+                    continue
+
+                # skip duplicates
+                if new in self.seen:
+                    continue
+                self.seen.add(new)
+
+                # forwards subsumption
+                if any(match(generalisation.formula, new) for generalisation in self.active):
+                    continue
+
+                unprocessed.append(Entry(new, major, minor))
+        self._add_to_passive(unprocessed)
+
+    def _add_to_passive(self, new: list[Entry]):
+        """add `new` to `self.passive`"""
+
+        if new and self.model is not None:
+            self.logits.extend(self.model.predict(new, self.goal))
+        self.passive.extend(new)

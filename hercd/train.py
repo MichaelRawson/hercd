@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.optim import Optimizer, AdamW
 from torch_geometric.data import Batch, Data
+from torch_geometric.data.data import BaseData
 
 from .constants import BATCH_SIZE
 from .model import Model
@@ -15,10 +16,10 @@ from .model import Model
 class CDDataset(Dataset):
     """a dataset based on gzipped JSON lines"""
 
-    data: list[Data]
+    data: list[BaseData]
     """list of graphs to be batched"""
 
-    def __init__(self, data: list[Data]):
+    def __init__(self, data: list[BaseData]):
         self.data = data
 
     @staticmethod

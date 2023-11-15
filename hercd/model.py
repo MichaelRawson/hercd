@@ -68,9 +68,6 @@ class Model(Module):
     """hidden layer"""
     output: Linear
 
-    cache: dict[tuple[F, F], float]
-    """cached results, reset on train()"""
-
     def __init__(self):
         super().__init__()
         self.embedding = Linear(NODE_SIZE, CHANNELS)
@@ -84,7 +81,6 @@ class Model(Module):
         ])
         self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS + META_SIZE, HIDDEN)
         self.output = Linear(HIDDEN, 1)
-        self.cache = {}
 
     def forward(self, graph: Data) -> Tensor:
         x = graph.x
@@ -102,16 +98,7 @@ class Model(Module):
         x = relu_(self.hidden(x))
         return self.output(x).view(-1)
 
-    def train(self, mode: bool = True):
-        super().train(mode)
-        self.cache.clear()
-
-    def predict(self, entry: Entry, goal: F) -> float:
-        if (entry.formula, goal) in self.cache:
-            return self.cache[(entry.formula, goal)]
-
-        graph = Graph(entry, goal)
-        batch = Batch.from_data_list([graph.torch()]).to('cuda')
-        prediction = float(torch.sigmoid(self(batch)))
-        self.cache[(entry.formula, goal)] = prediction
-        return prediction
+    def predict(self, entries: list[Entry], goal: F) -> list[float]:
+        graphs = [Graph(entry, goal).torch() for entry in entries]
+        batch = Batch.from_data_list(graphs).to('cuda')
+        return self(batch).tolist()
