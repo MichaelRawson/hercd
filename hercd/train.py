@@ -3,7 +3,7 @@ import json
 
 import torch
 from torch import Tensor
-from torch.nn import functional as F
+from torch.nn.functional import binary_cross_entropy_with_logits
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.optim import Optimizer, AdamW
@@ -52,9 +52,8 @@ def forward(model: Model, batch: Data) -> tuple[Tensor, Tensor]:
     """compute the loss for this batch"""
     batch = batch.to('cuda')
     logit = model(batch)
-    loss = F.binary_cross_entropy_with_logits(logit, batch.y)
-    prediction = torch.sigmoid(logit)
-    return prediction, loss
+    loss = binary_cross_entropy_with_logits(logit, batch.y)
+    return logit, loss
 
 def create_optimizer(model: Model) -> Optimizer:
     """make an optimiser for `model`"""
@@ -65,7 +64,7 @@ def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
 
     model.eval()
     truth = []
-    predictions = []
+    logits = []
     losses = []
     for batch in DataLoader(
         dataset,
@@ -74,33 +73,15 @@ def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
     ):
         truth.append(batch.y)
         with torch.no_grad():
-            prediction, loss = forward(model, batch)
-        predictions.append(prediction)
+            logit, loss = forward(model, batch)
+        logits.append(logit)
         losses.append(loss)
 
     truth = torch.cat(truth)
-    distribution = torch.cat(predictions)
+    logits = torch.cat(logits)
     loss = torch.tensor(losses).mean()
-    writer.add_histogram('validation/distribution', distribution, global_step=step)
-    writer.add_pr_curve('validation/pr', truth, distribution, global_step=step)
+    writer.add_histogram('validation/distribution', logits, global_step=step)
     writer.add_scalar('validation/loss', loss, global_step=step)
-
-def validate_steps(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
-    """evaluate `model` on steps of a proof"""
-
-    model.eval()
-    predictions = []
-    for batch in DataLoader(
-        dataset,
-        collate_fn=CDDataset.collate,
-        batch_size=BATCH_SIZE
-    ):
-        with torch.no_grad():
-            prediction, _ = forward(model, batch)
-        predictions.append(prediction)
-
-    distribution = torch.cat(predictions)
-    writer.add_histogram('steps/distribution', distribution, global_step=step)
 
 
 def epoch(

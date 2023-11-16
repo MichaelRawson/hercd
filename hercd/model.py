@@ -98,7 +98,7 @@ class Model(Module):
         x = relu_(self.hidden(x))
         return self.output(x).view(-1)
 
-    def predict(self, entries: list[Entry], goal: F) -> list[float]:
+    def predict(self, entries: list[Entry], goal: F) -> Tensor:
         graphs = [Graph(entry, goal).torch() for entry in entries]
         batch = Batch.from_data_list(graphs).to('cuda')
-        return self(batch).tolist()
+        return self(batch)

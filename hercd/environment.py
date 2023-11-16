@@ -57,17 +57,18 @@ class Environment:
 
         while True:
             target = random.choice(self.passive)
+
             # positive examples are the ancestors of `target`
-            positive = {
-                entry
-                for entry in target.ancestors()
-            }
+            positive = set(target.ancestors())
+
             # negatives are the rest
             negative = [
                 entry
                 for entry in self.active
                 if entry.formula not in positive
             ]
+
+            # selected an axiom or somehow all in `self.active` are ancestors, respectively
             if not positive or not negative:
                 continue
 
@@ -137,5 +138,5 @@ class Environment:
         """add `new` to `self.passive`"""
 
         if new and self.model is not None:
-            self.logits.extend(self.model.predict(new, self.goal))
+            self.logits.extend(self.model.predict(new, self.goal).tolist())
         self.passive.extend(new)

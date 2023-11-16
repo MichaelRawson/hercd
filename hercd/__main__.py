@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import atexit
-import gc
 import gzip
 import json
 import random
@@ -14,7 +13,7 @@ from .constants import EPISODES_PER_EPOCH, EXPERIENCE_BUFFER_LIMIT, SAMPLES_PER_
 from .environment import Environment
 from .graph import Graph
 from .model import Model
-from .train import CDDataset, create_optimizer, validate, validate_steps, epoch
+from .train import CDDataset, create_optimizer, validate, epoch
 
 AXIOMS: list[Entry] = [Entry(c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1))))]
 
@@ -118,7 +117,6 @@ DEDUCTION: list[Entry] = [
 ]
 
 STEPS: set[F] = {entry.formula for entry in DEDUCTION}
-STEP_DATASET = CDDataset([Graph(entry, GOAL).torch() for entry in DEDUCTION])
 
 def baseline():
     """uniform-policy mode"""
@@ -132,12 +130,13 @@ def baseline():
         progress = sum(entry.formula in STEPS for entry in environment.active + environment.passive)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
+
 def generate():
     """uniform-policy mode, but output training data"""
     environment = Environment(AXIOMS, GOAL)
     while True:
         environment.run()
-        for _ in range(SAMPLES_PER_EPISODE):
+        for _ in range(SAMPLES_PER_EPISODE // 2):
             target, positive, negative = environment.sample()
             for y, sample in (1.0, positive), (0.0, negative):
                 graph = Graph(sample, target)
@@ -158,8 +157,7 @@ def train(path: str):
     while True:
         step = epoch(model, optimizer, train, writer, step)
         validate(model, test, writer, step)
-        validate_steps(model, STEP_DATASET, writer, step)
-
+        writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=step)
 
 def learn():
     """online-learning 'reinforcement' mode"""
@@ -204,14 +202,14 @@ def learn():
         while len(experience) > EXPERIENCE_BUFFER_LIMIT:
             experience.pop()
             save.pop()
-        gc.collect()
 
         environment.model = model
         dataset = CDDataset(experience)
         train, test = random_split(dataset, [.95, .05])
         total_batches = epoch(model, optimizer, train, writer, total_batches)
         validate(model, test, writer, total_batches)
-        validate_steps(model, STEP_DATASET, writer, total_batches)
+        writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=total_batches)
+
 
 if __name__ == '__main__':
     random.seed(0)
