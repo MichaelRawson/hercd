@@ -1,8 +1,9 @@
+from array import array
 import random
 from typing import Optional
 
 import torch
-from torch.distributions.categorical import Categorical
+from torch.distributions import Categorical
 
 from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens
 from .constants import FACT_LIMIT
@@ -23,7 +24,7 @@ class Environment:
     """the active set"""
     passive: list[Entry]
     """the passive set"""
-    logits: list[float]
+    logits: array
     """associated logits for the passive set from the model"""
     seen: set[F]
     """formulae we've already seen this episode"""
@@ -39,7 +40,7 @@ class Environment:
         """reinitialise the environment, copying axioms to `known`"""
         self.active = []
         self.passive = []
-        self.logits = []
+        self.logits = array('f')
         self.seen = set()
         self._add_to_passive(self.axioms)
 
@@ -79,11 +80,9 @@ class Environment:
     def _select(self) -> Entry:
         """choose an entry from `self.passive`"""
 
-        index = 0
         if self.model is None:
             index = random.randrange(len(self.passive))
         else:
-            assert len(self.logits) == len(self.passive)
             logits = torch.tensor(self.logits)
             distribution = Categorical(logits=logits)
             index = distribution.sample()

@@ -91,7 +91,7 @@ def epoch(
     writer: SummaryWriter,
     step: int
 ) -> int:
-    """train a `model` using `optimizer` from one pass through `dataset`"""
+    """train a `model` for one epoch using `optimizer`"""
 
     model.train()
     for batch in DataLoader(

@@ -9,11 +9,11 @@ from torch.utils.data import random_split
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from .cd import Entry, F, n, c, D
-from .constants import EPISODES_PER_EPOCH, EXPERIENCE_BUFFER_LIMIT, SAMPLES_PER_EPISODE
+from .constants import EXPERIENCE_BUFFER_LIMIT, EPISODES_PER_EPOCH, SAMPLES_PER_EPISODE
 from .environment import Environment
 from .graph import Graph
 from .model import Model
-from .train import CDDataset, create_optimizer, validate, epoch
+from .train import CDDataset, create_optimizer, epoch, validate
 
 AXIOMS: list[Entry] = [Entry(c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1))))]
 
@@ -118,7 +118,7 @@ DEDUCTION: list[Entry] = [
 
 STEPS: set[F] = {entry.formula for entry in DEDUCTION}
 
-def baseline():
+def baseline_mode():
     """uniform-policy mode"""
     environment = Environment(AXIOMS, GOAL)
     environment.chatty = True
@@ -131,7 +131,7 @@ def baseline():
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
 
-def generate():
+def generate_mode():
     """uniform-policy mode, but output training data"""
     environment = Environment(AXIOMS, GOAL)
     while True:
@@ -144,22 +144,22 @@ def generate():
                 print(json.dumps(graph.__dict__, default=list))
 
 
-def train(path: str):
+def train_mode(path: str):
     """offline-train a model from data provided in `path`"""
 
     dataset = CDDataset.from_file(path)
-    train, test = random_split(dataset, [.95, .05])
+    train_data, test_data = random_split(dataset, [.95, .05])
     model = Model().to('cuda')
     optimizer = create_optimizer(model)
 
     step = 1
     writer = SummaryWriter()
     while True:
-        step = epoch(model, optimizer, train, writer, step)
-        validate(model, test, writer, step)
+        step = epoch(model, optimizer, train_data, writer, step)
+        validate(model, test_data, writer, step)
         writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=step)
 
-def learn():
+def learn_mode():
     """online-learning 'reinforcement' mode"""
 
     model = Model().to('cuda')
@@ -203,12 +203,12 @@ def learn():
             experience.pop()
             save.pop()
 
-        environment.model = model
         dataset = CDDataset(experience)
-        train, test = random_split(dataset, [.95, .05])
-        total_batches = epoch(model, optimizer, train, writer, total_batches)
-        validate(model, test, writer, total_batches)
+        train_data, test_data = random_split(dataset, [.95, .05])
+        total_batches = epoch(model, optimizer, train_data, writer, total_batches)
+        validate(model, test_data, writer, total_batches)
         writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=total_batches)
+        environment.model = model
 
 
 if __name__ == '__main__':
@@ -217,12 +217,12 @@ if __name__ == '__main__':
 
     import sys
     if sys.argv[1] == 'baseline':
-        baseline()
+        baseline_mode()
     elif sys.argv[1] == 'generate':
-        generate()
+        generate_mode()
     elif sys.argv[1] == 'train':
-        train(sys.argv[2])
+        train_mode(sys.argv[2])
     elif sys.argv[1] == 'learn':
-        learn()
+        learn_mode()
     else:
         print('not implemented: ', sys.argv[1])

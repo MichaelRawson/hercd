@@ -94,7 +94,7 @@ class Model(Module):
             xs.append(x)
         xs = torch.cat(xs, dim=1)
         x = global_max_pool(xs, batch)
-        x = torch.cat((x, meta), dim=-1)
+        x = torch.cat((x, meta), dim=1)
         x = relu_(self.hidden(x))
         return self.output(x).view(-1)
 
