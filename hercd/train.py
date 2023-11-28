@@ -31,7 +31,6 @@ class CDDataset(Dataset):
                 data.append(Data(
                     x = torch.tensor(raw['nodes']),
                     edge_index = torch.tensor([raw['sources'], raw['targets']]),
-                    meta = torch.tensor([raw['meta']]),
                     y = torch.tensor(float(raw['y']))
                 ))
 
@@ -102,7 +101,8 @@ def epoch(
     ):
         _, loss = forward(model, batch)
         loss.backward()
-        writer.add_scalar('train/loss', loss.detach(), global_step=step)
+        if step % 10 == 0:
+            writer.add_scalar('train/loss', loss.detach(), global_step=step)
         optimizer.step()
         optimizer.zero_grad()
         step += 1

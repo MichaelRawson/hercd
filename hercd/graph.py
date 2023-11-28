@@ -4,7 +4,7 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.data.data import BaseData
 
-from .cd import F, N, size, height
+from .cd import F, N
 from .environment import Entry
 
 class Node:
@@ -12,28 +12,22 @@ class Node:
     N = 1
     C1 = 2
     C2 = 3
-    END = 4
+    ENTRY = 4
+    GOAL = 5
+    END = 6
 
-def feature(flavour: int, goal: bool, tree_size: int, height: int) -> array:
-    """make a 1-dimensional feature vector for a node"""
-    result = array('f')
-    for i in range(Node.END):
-        result.append(flavour == i)
-    result.append(goal)
-    result.append(float(height) / float(tree_size))
-    return result
+CACHE: dict[tuple[int, ...], int] = {}
+"""cache for nodes"""
 
 class Graph:
     """a graph object for representing CD states"""
 
-    nodes: list[array]
+    nodes: array
     """node feature vectors"""
     sources: array
     """indices of source nodes"""
     targets: array
     """indices of target nodes"""
-    meta: array
-    """metadata for the whole graph"""
     y: float
     """target value, if available"""
     entry: str
@@ -42,69 +36,50 @@ class Graph:
     """the goal this was constructed from"""
 
     def __init__(self, entry: Entry, goal: F):
-        self.nodes = []
+        self.nodes = array('L')
         self.sources = array('L')
         self.targets = array('L')
-        self.meta = array('f')
         self.y = 0.0
         self.entry = str(entry.formula)
         self.goal = str(goal)
 
-        derivation_tree_size = float(entry.tree_size())
-        derivation_compacted_size = float(entry.compacted_size())
-        derivation_height = float(entry.height())
-        entry_height = float(height(entry.formula))
-        entry_size = float(size(entry.formula))
-        goal_height = float(height(goal))
-        goal_size = float(size(goal))
-
-        self.meta.append(derivation_compacted_size / derivation_tree_size)
-        self.meta.append(derivation_height / derivation_tree_size)
-        self.meta.append(derivation_height / derivation_compacted_size)
-        self.meta.append(entry_height / entry_size)
-        self.meta.append(goal_height / goal_size)
-        self.meta.append(entry_height / goal_height)
-        self.meta.append(entry_size / goal_size)
-
-        cache = {}
-        self._formula(cache, goal, goal=True)
-        self._formula(cache, entry.formula, goal=False)
+        CACHE.clear()
+        self._node(Node.ENTRY, Node.ENTRY, self._formula(entry.formula))
+        self._node(Node.GOAL, Node.GOAL, self._formula(goal))
 
     def torch(self) -> BaseData:
         """produce a Torch representation of this graph"""
         return Data(
             x = torch.tensor(self.nodes),
             edge_index = torch.tensor([self.sources, self.targets]),
-            meta = torch.tensor([self.meta]),
             y = torch.tensor(self.y)
         )
 
-    def _formula(self, cache: dict[F, int], f: F, goal: bool) -> int:
+    def _formula(self, f: F) -> int:
         """add a formula to the graph"""
-        if f in cache:
-            return cache[f]
+        if f in CACHE:
+            return CACHE[f]
 
         if isinstance(f, int):
-            node = len(self.nodes)
-            self.nodes.append(feature(Node.VAR, goal, 1, 1))
+            return self._node(Node.VAR, f)
         elif isinstance(f, N):
-            negated = self._formula(cache, f.negated, goal)
-            node = len(self.nodes)
-            self.nodes.append(feature(Node.N, goal, f.size, f.height))
-            self.targets.append(negated)
-            self.sources.append(node)
+            negated = self._formula(f.negated)
+            return self._node(Node.N, Node.N, negated)
         else:
-            left = self._formula(cache, f.left, goal)
-            right = self._formula(cache, f.right, goal)
-            node = len(self.nodes)
-            self.nodes.append(feature(Node.C1, goal, f.size, f.height))
-            self.nodes.append(feature(Node.C2, goal, f.size, f.height))
-            self.sources.append(node)
-            self.targets.append(node + 1)
-            self.sources.append(node + 1)
-            self.targets.append(left)
-            self.sources.append(node)
-            self.targets.append(right)
+            left = self._formula(f.left)
+            right = self._formula(f.right)
+            left = self._node(Node.C2, Node.C2, left)
+            return self._node(Node.C1, Node.C1, left, right)
 
-        cache[f] = node
-        return node
+    def _node(self, label: int, key: int, *children: int) -> int:
+        """add a node with `label` and `children`, cached by (key, *children)"""
+        if (key, *children) in CACHE:
+            return CACHE[key, *children]
+
+        index = len(self.nodes)
+        self.nodes.append(label)
+        for child in children:
+            self.sources.append(index)
+            self.targets.append(child)
+        CACHE[key, *children] = index
+        return index

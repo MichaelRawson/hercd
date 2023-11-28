@@ -1,15 +1,13 @@
 import torch
 from torch import Tensor
 from torch.nn.functional import relu_
-from torch.nn import Linear, Module, ModuleList
+from torch.nn import Embedding, Linear, Module, ModuleList
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import InstanceNorm, MessagePassing, global_max_pool
 
 from .cd import F, Entry
-from .graph import Graph
+from .graph import Node, Graph
 
-NODE_SIZE = 6
-META_SIZE = 7
 CHANNELS = 64
 GIN_HIDDEN = 256
 CONVOLUTIONS = 8
@@ -58,7 +56,7 @@ class DirectedGINConv(Module):
 class Model(Module):
     """classification of graphs"""
 
-    embedding: Linear
+    embedding: Embedding
     """node embedding"""
     bn: ModuleList
     """batch normalisation layers"""
@@ -70,7 +68,7 @@ class Model(Module):
 
     def __init__(self):
         super().__init__()
-        self.embedding = Linear(NODE_SIZE, CHANNELS)
+        self.embedding = Embedding(Node.END, CHANNELS)
         self.conv = ModuleList([
             DirectedGINConv()
             for _ in range(CONVOLUTIONS)
@@ -79,13 +77,12 @@ class Model(Module):
             InstanceNorm(CHANNELS)
             for _ in range(CONVOLUTIONS)
         ])
-        self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS + META_SIZE, HIDDEN)
+        self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS, HIDDEN)
         self.output = Linear(HIDDEN, 1)
 
     def forward(self, graph: Data) -> Tensor:
         x = graph.x
         edge_index = graph.edge_index
-        meta = graph.meta
         batch = graph.batch
         x = self.embedding(x)
         xs = [x]
@@ -94,7 +91,6 @@ class Model(Module):
             xs.append(x)
         xs = torch.cat(xs, dim=1)
         x = global_max_pool(xs, batch)
-        x = torch.cat((x, meta), dim=1)
         x = relu_(self.hidden(x))
         return self.output(x).view(-1)
 

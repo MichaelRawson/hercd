@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 from torch.distributions import Categorical
 
-from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens
+from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens, n_simplify
 from .constants import FACT_LIMIT
 from .model import Model
 
@@ -111,27 +111,40 @@ class Environment:
 
         # do inference
         unprocessed = []
+        if given.n_simplify:
+            new = n_simplify(given)
+            if self._retain(new):
+                unprocessed.append(Entry(new, given))
+
         for other in self.active:
             for major, minor in (other, given), (given, other):
                 # see if they produce anything
-                if not isinstance(major.formula, C):
+                if not isinstance(major.formula, C) or major.n_simplify:
                     continue
+
+                left = major.formula.left
+                right = major.formula.right
                 try:
-                    new = modus_ponens(major.formula.left, major.formula.right, minor.formula)
+                    new = modus_ponens(left, right, minor.formula)
                 except (NoUnifier, TooBig):
                     continue
 
-                # skip duplicates
-                if new in self.seen:
-                    continue
-                self.seen.add(new)
-
-                # forwards subsumption
-                if any(match(generalisation.formula, new) for generalisation in self.active):
-                    continue
-
-                unprocessed.append(Entry(new, major, minor))
+                if self._retain(new):
+                    unprocessed.append(Entry(new, major, minor))
         self._add_to_passive(unprocessed)
+
+    def _retain(self, new: F) -> bool:
+        """check whether `new` should be retained"""
+        # skip duplicates
+        if new in self.seen:
+            return False
+        self.seen.add(new)
+
+        # forwards subsumption
+        if any(match(generalisation.formula, new) for generalisation in self.active):
+            return False
+
+        return True
 
     def _add_to_passive(self, new: list[Entry]):
         """add `new` to `self.passive`"""

@@ -29,8 +29,6 @@ class N:
     """the negated formula"""
     size: int
     """the tree size of the formula"""
-    height: int
-    """the height of the formula"""
     hash: int
     """a precomputed hash"""
 
@@ -40,7 +38,6 @@ class N:
         self.size = size(negated) + 1
         if self.size > TERM_SIZE_LIMIT:
             raise TooBig()
-        self.height = height(negated) + 1
         self.hash = hash((negated,))
 
     def __hash__(self) -> int:
@@ -70,8 +67,6 @@ class C:
     """the right-hand side"""
     size: int
     """the tree size of the formula"""
-    height: int
-    """the height of the formula"""
     hash: int
     """a precomputed hash"""
 
@@ -82,14 +77,13 @@ class C:
         self.size = size(left) + size(right) + 1
         if self.size > TERM_SIZE_LIMIT:
             raise TooBig()
-        self.height = max(height(left), height(right)) + 1
         self.hash = hash((left, right))
 
     def __hash__(self) -> int:
         return self.hash
 
     def __eq__(self, other: F) -> bool:
-        return id(self) == id(other) or isinstance(other, C) and self.hash == other.hash and self.left == other.left and self.right == other.right
+        return id(self) == id(other) or isinstance(other, C) and self.left == other.left and self.right == other.right
 
     def __str__(self) -> str:
         return f'C{name(self.left)}{name(self.right)}'
@@ -109,14 +103,6 @@ def size(f: F) -> int:
         return 1
 
     return f.size
-
-
-def height(f: F) -> int:
-    """height of a formula"""
-    if isinstance(f, int):
-        return 1
-
-    return f.height
 
 
 @lru_cache(maxsize=CACHE_SIZE)
@@ -256,50 +242,36 @@ class Entry:
     """the formula that this entry proves"""
     parents: tuple['Entry', ...]
     """premises - empty for axioms"""
+    n_simplify: bool
+    """is the formula a candidate for n-simplification?"""
 
     def __init__(self, term: F, *parents: 'Entry'):
         self.formula = term
         self.parents = parents
+        self.n_simplify = False
+        if isinstance(self.formula, C):
+            left = self.formula.left
+            right = self.formula.right
+            self.n_simplify = isinstance(left, int) and not occurs(left, right)
 
-    def ancestors(self, seen: Optional[set['Entry']] = None) -> Generator['Entry', None, None]:
+    def ancestors(self) -> Generator['Entry', None, None]:
         """this entry's ancestors"""
         for parent in self.parents:
-            if seen is not None:
-                if parent in seen:
-                    continue
-                else:
-                    seen.add(parent)
-
             yield parent
-            yield from parent.ancestors(seen)
+            yield from parent.ancestors()
 
-    def derivation(self, seen: Optional[set['Entry']] = None) -> Generator['Entry', None, None]:
-        """this entry and its ancestors"""
-        yield self
-        yield from self.ancestors(seen)
+def n_simplify(major: Entry) -> F:
+    """n-simplification: if x does not occur in F, then CxF => F"""
+    assert major.n_simplify and isinstance(major.formula, C)
+    return rename({}, major.formula.right)
 
-    def compacted_ancestors(self) -> Generator['Entry', None, None]:
-        """this entry's ancestors, without duplicates"""
-        seen = set()
-        yield from self.ancestors(seen)
 
-    def compacted_derivation(self) -> Generator['Entry', None, None]:
-        """this entry and its ancestors, without duplicates"""
-        seen = set()
-        yield from self.derivation(seen)
-
-    def tree_size(self) -> int:
-        return sum(1 for _ in self.derivation())
-
-    def compacted_size(self) -> int:
-        return sum(1 for _ in self.compacted_derivation())
-
-    def height(self) -> int:
-        return 1 + max((parent.height() for parent in self.parents), default=0)
-
-def D(left: Entry, right: Entry) -> Entry:
+def D(major: Entry, minor: Optional[Entry] = None) -> Entry:
     """manually write a proof as D-terms"""
+    assert isinstance(major.formula, C)
 
-    assert isinstance(left.formula, C)
-    new = modus_ponens(left.formula.left, left.formula.right, right.formula)
-    return Entry(new, left, right)
+    if not minor:
+        assert major.n_simplify
+        return Entry(n_simplify(major), major)
+    new = modus_ponens(major.formula.left, major.formula.right, minor.formula)
+    return Entry(new, major, minor)
