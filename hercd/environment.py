@@ -100,9 +100,26 @@ class Environment:
                 return
 
         # backward subsumption
+        deleted = set()
         for index in reversed(range(len(self.active))):
             if match(given.formula, self.active[index].formula):
-                del self.active[index]
+                deleted.add(self.active.pop(index))
+
+        if deleted:
+            # orphaned active clauses
+            index = len(self.active)
+            while index > 0:
+                index -= 1
+                if any(parent in deleted for parent in self.active[index].parents):
+                    deleted.add(self.active.pop(index))
+                    index = len(self.active)
+
+            # orphaned passive clauses
+            for index in reversed(range(len(self.passive))):
+                if any(parent in deleted for parent in self.passive[index].parents):
+                    if self.model:
+                        del self.logits[index]
+                    del self.passive[index]
 
         # we've committed to `given` now
         self.active.append(given)
