@@ -28,6 +28,8 @@ class Environment:
     """associated logits for the passive set from the model"""
     seen: set[F]
     """formulae we've already seen this episode"""
+    deleted: set[Entry]
+    """entries we deleted"""
 
     def __init__(self, axioms: list[Entry], goal: F):
         self.axioms = axioms
@@ -42,6 +44,7 @@ class Environment:
         self.passive = []
         self.logits = array('f')
         self.seen = set()
+        self.deleted = set()
         self._add_to_passive(self.axioms)
 
     def run(self):
@@ -94,6 +97,12 @@ class Environment:
     def _activate(self, given: Entry):
         """activate `given`"""
 
+        # re-check if `given` is orphaned
+        for parent in given.parents:
+            if parent in self.deleted:
+                print("orphaned")
+                return
+
         # re-check forward subsumption
         for other in self.active:
             if match(other.formula, given.formula):
@@ -113,13 +122,7 @@ class Environment:
                 if any(parent in deleted for parent in self.active[index].parents):
                     deleted.add(self.active.pop(index))
                     index = len(self.active)
-
-            # orphaned passive clauses
-            for index in reversed(range(len(self.passive))):
-                if any(parent in deleted for parent in self.passive[index].parents):
-                    if self.model:
-                        del self.logits[index]
-                    del self.passive[index]
+            self.deleted |= deleted
 
         # we've committed to `given` now
         self.active.append(given)
