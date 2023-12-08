@@ -28,8 +28,6 @@ class Environment:
     """associated logits for the passive set from the model"""
     seen: set[F]
     """formulae we've already seen this episode"""
-    deleted: set[Entry]
-    """entries we deleted"""
 
     def __init__(self, axioms: list[Entry], goal: F):
         self.axioms = axioms
@@ -43,8 +41,6 @@ class Environment:
         self.active = []
         self.passive = []
         self.logits = array('f')
-        self.seen = set()
-        self.deleted = set()
         self._add_to_passive(self.axioms)
 
     def run(self):
@@ -97,12 +93,6 @@ class Environment:
     def _activate(self, given: Entry):
         """activate `given`"""
 
-        # re-check if `given` is orphaned
-        for parent in given.parents:
-            if parent in self.deleted:
-                print("orphaned")
-                return
-
         # re-check forward subsumption
         for other in self.active:
             if match(other.formula, given.formula):
@@ -122,7 +112,13 @@ class Environment:
                 if any(parent in deleted for parent in self.active[index].parents):
                     deleted.add(self.active.pop(index))
                     index = len(self.active)
-            self.deleted |= deleted
+
+        # orphaned passive clauses
+        for index in reversed(range(len(self.passive))):
+            if any(parent in deleted for parent in self.passive[index].parents):
+                del self.passive[index]
+                if self.model is not None:
+                    del self.logits[index]
 
         # we've committed to `given` now
         self.active.append(given)
@@ -155,16 +151,8 @@ class Environment:
 
     def _retain(self, new: F) -> bool:
         """check whether `new` should be retained"""
-        # skip duplicates
-        if new in self.seen:
-            return False
-        self.seen.add(new)
-
-        # forwards subsumption
-        if any(match(generalisation.formula, new) for generalisation in self.active):
-            return False
-
-        return True
+        # just forwards subsumption (for now?)
+        return not any(match(generalisation.formula, new) for generalisation in self.active)
 
     def _add_to_passive(self, new: list[Entry]):
         """add `new` to `self.passive`"""
