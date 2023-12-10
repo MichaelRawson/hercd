@@ -56,7 +56,7 @@ def forward(model: Model, batch: Data) -> tuple[Tensor, Tensor]:
 
 def create_optimizer(model: Model) -> Optimizer:
     """make an optimiser for `model`"""
-    return AdamW(model.parameters(), amsgrad=True)
+    return AdamW(model.parameters(), amsgrad=True, weight_decay=0.1)
 
 def validate(model: Model, dataset: Dataset, writer: SummaryWriter, step: int):
     """evaluate `model` on `dataset`"""

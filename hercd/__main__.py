@@ -204,9 +204,7 @@ def learn_mode():
             save.pop()
 
         dataset = CDDataset(experience)
-        train_data, test_data = random_split(dataset, [.95, .05])
-        total_batches = epoch(model, optimizer, train_data, writer, total_batches)
-        validate(model, test_data, writer, total_batches)
+        total_batches = epoch(model, optimizer, dataset, writer, total_batches)
         writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=total_batches)
         environment.model = model
 

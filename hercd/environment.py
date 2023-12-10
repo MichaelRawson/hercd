@@ -151,6 +151,7 @@ class Environment:
 
     def _retain(self, new: F) -> bool:
         """check whether `new` should be retained"""
+        assert not match(new, self.goal)
         # just forwards subsumption (for now?)
         return not any(match(generalisation.formula, new) for generalisation in self.active)
 
