@@ -127,7 +127,7 @@ def baseline_mode():
     while True:
         environment.run()
         total_episodes += 1
-        progress = sum(entry.formula in STEPS for entry in environment.active + environment.passive)
+        progress = sum(entry.formula in STEPS for entry in environment.active)
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
 
@@ -186,7 +186,7 @@ def learn_mode():
             environment.run()
             total_episodes += 1
 
-            progress = sum(entry.formula in STEPS for entry in environment.active + environment.passive)
+            progress = sum(entry.formula in STEPS for entry in environment.active)
             writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
             for _ in range(SAMPLES_PER_EPISODE // 2):

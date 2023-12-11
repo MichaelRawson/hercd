@@ -244,11 +244,14 @@ class Entry:
     """premises - empty for axioms"""
     n_simplify: bool
     """is the formula a candidate for n-simplification?"""
+    score: float
+    """a score assigned by a neural network, if applicable"""
 
     def __init__(self, term: F, *parents: 'Entry'):
         self.formula = term
         self.parents = parents
         self.n_simplify = False
+        self.score = 0.0
         if isinstance(self.formula, C):
             left = self.formula.left
             right = self.formula.right

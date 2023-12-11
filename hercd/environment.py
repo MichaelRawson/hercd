@@ -2,11 +2,8 @@ from array import array
 import random
 from typing import Optional
 
-import torch
-from torch.distributions import Categorical
-
 from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens, n_simplify
-from .constants import FACT_LIMIT
+from .constants import FACT_LIMIT, EPSILON
 from .model import Model
 
 class Environment:
@@ -24,8 +21,6 @@ class Environment:
     """the active set"""
     passive: list[Entry]
     """the passive set"""
-    logits: array
-    """associated logits for the passive set from the model"""
     seen: set[F]
     """formulae we've already seen this episode"""
 
@@ -40,7 +35,6 @@ class Environment:
         """reinitialise the environment, copying axioms to `known`"""
         self.active = []
         self.passive = []
-        self.logits = array('f')
         self._add_to_passive(self.axioms)
 
     def run(self):
@@ -79,15 +73,12 @@ class Environment:
     def _select(self) -> Entry:
         """choose an entry from `self.passive`"""
 
-        if self.model is None:
-            index = random.randrange(len(self.passive))
+        length = len(self.passive)
+        if self.model is None or random.random() < EPSILON:
+            index = random.randrange(length)
         else:
-            logits = torch.tensor(self.logits)
-            distribution = Categorical(logits=logits)
-            index = distribution.sample()
+            index = max(range(length), key=lambda n: self.passive[n].score)
 
-        if self.model is not None:
-            del self.logits[index]
         return self.passive.pop(index)
 
     def _activate(self, given: Entry):
@@ -117,13 +108,11 @@ class Environment:
         for index in reversed(range(len(self.passive))):
             if any(parent in deleted for parent in self.passive[index].parents):
                 del self.passive[index]
-                if self.model is not None:
-                    del self.logits[index]
 
         # we've committed to `given` now
         self.active.append(given)
         if self.chatty:
-            print(len(self.active), given.formula)
+            print(len(self.active), given.formula, given.score)
 
         # do inference
         unprocessed = []
@@ -151,6 +140,7 @@ class Environment:
 
     def _retain(self, new: F) -> bool:
         """check whether `new` should be retained"""
+
         assert not match(new, self.goal)
         # just forwards subsumption (for now?)
         return not any(match(generalisation.formula, new) for generalisation in self.active)
@@ -159,5 +149,6 @@ class Environment:
         """add `new` to `self.passive`"""
 
         if new and self.model is not None:
-            self.logits.extend(self.model.predict(new, self.goal).tolist())
+            for entry, score in zip(new, self.model.predict(new, self.goal).tolist()):
+                entry.score = score
         self.passive.extend(new)
