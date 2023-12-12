@@ -1,4 +1,3 @@
-from array import array
 import random
 from typing import Optional
 
@@ -21,8 +20,6 @@ class Environment:
     """the active set"""
     passive: list[Entry]
     """the passive set"""
-    seen: set[F]
-    """formulae we've already seen this episode"""
 
     def __init__(self, axioms: list[Entry], goal: F):
         self.axioms = axioms
@@ -53,13 +50,13 @@ class Environment:
             target = random.choice(self.passive)
 
             # positive examples are the ancestors of `target`
-            positive = set(target.ancestors())
+            positive = target.ancestors
 
             # negatives are the rest
             negative = [
                 entry
                 for entry in self.active
-                if entry.formula not in positive
+                if entry not in positive
             ]
 
             # selected an axiom or somehow all in `self.active` are ancestors, respectively
@@ -84,12 +81,11 @@ class Environment:
     def _activate(self, given: Entry):
         """activate `given`"""
 
-        # re-check forward subsumption
-        for other in self.active:
-            if match(other.formula, given.formula):
-                return
+        # re-check retention
+        if not self._retain(given.formula):
+            return
 
-        # backward subsumption
+        # interreduction
         deleted = set()
         for index in reversed(range(len(self.active))):
             if match(given.formula, self.active[index].formula):
@@ -112,7 +108,7 @@ class Environment:
         # we've committed to `given` now
         self.active.append(given)
         if self.chatty:
-            print(len(self.active), given.formula, given.score)
+            print(len(self.active), given.formula)
 
         # do inference
         unprocessed = []

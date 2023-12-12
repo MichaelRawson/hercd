@@ -242,6 +242,8 @@ class Entry:
     """the formula that this entry proves"""
     parents: tuple['Entry', ...]
     """premises - empty for axioms"""
+    ancestors: set['Entry']
+    """transitive relation of parents"""
     n_simplify: bool
     """is the formula a candidate for n-simplification?"""
     score: float
@@ -250,18 +252,13 @@ class Entry:
     def __init__(self, term: F, *parents: 'Entry'):
         self.formula = term
         self.parents = parents
+        self.ancestors = set(parents).union(*(parent.ancestors for parent in parents))
         self.n_simplify = False
         self.score = 0.0
         if isinstance(self.formula, C):
             left = self.formula.left
             right = self.formula.right
             self.n_simplify = isinstance(left, int) and not occurs(left, right)
-
-    def ancestors(self) -> Generator['Entry', None, None]:
-        """this entry's ancestors"""
-        for parent in self.parents:
-            yield parent
-            yield from parent.ancestors()
 
 def n_simplify(major: Entry) -> F:
     """n-simplification: if x does not occur in F, then CxF => F"""

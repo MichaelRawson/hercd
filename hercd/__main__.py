@@ -199,9 +199,8 @@ def learn_mode():
 
         random.shuffle(experience)
         random.shuffle(save)
-        while len(experience) > EXPERIENCE_BUFFER_LIMIT:
-            experience.pop()
-            save.pop()
+        del experience[EXPERIENCE_BUFFER_LIMIT:]
+        del save[EXPERIENCE_BUFFER_LIMIT:]
 
         dataset = CDDataset(experience)
         total_batches = epoch(model, optimizer, dataset, writer, total_batches)
