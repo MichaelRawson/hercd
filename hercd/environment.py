@@ -56,10 +56,10 @@ class Environment:
             negative = [
                 entry
                 for entry in self.active
-                if entry not in positive
+                if entry.formula not in positive
             ]
 
-            # selected an axiom or somehow all in `self.active` are ancestors, respectively
+            # selected an axiom or somehow all in `self.active` are ancestors
             if not positive or not negative:
                 continue
 
