@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import atexit
 import gzip
-import json
 import random
 
 import torch
@@ -9,11 +8,10 @@ from torch.utils.data import random_split
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from .cd import Entry, F, n, c, D
-from .constants import EXPERIENCE_BUFFER_LIMIT, EPISODES_PER_EPOCH, SAMPLES_PER_EPISODE
+from .constants import EXPERIENCE_BUFFER_LIMIT, SAMPLES_PER_EPISODE
 from .environment import Environment
-from .graph import Graph
-from .model import Model
-from .train import CDDataset, create_optimizer, epoch, validate
+from .train import DEVICE, Train, Experience, CDDataset, encode_formula, create_optimizer, predict, epoch, validate
+from .model import Input, Model
 
 AXIOMS: list[Entry] = [Entry(c(c(c(c(c(1,2),c(n(3),n(4))),3),5),c(c(5,1),c(4,1))))]
 
@@ -120,6 +118,7 @@ STEPS: set[F] = {entry.formula for entry in DEDUCTION}
 
 def baseline_mode():
     """uniform-policy mode"""
+
     environment = Environment(AXIOMS, GOAL)
     environment.chatty = True
     writer = SummaryWriter()
@@ -131,25 +130,12 @@ def baseline_mode():
         writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
 
-def generate_mode():
-    """uniform-policy mode, but output training data"""
-    environment = Environment(AXIOMS, GOAL)
-    while True:
-        environment.run()
-        for _ in range(SAMPLES_PER_EPISODE // 2):
-            target, positive, negative = environment.sample()
-            for y, sample in (1.0, positive), (0.0, negative):
-                graph = Graph(sample, target)
-                graph.y = y
-                print(json.dumps(graph.__dict__, default=list))
-
-
 def train_mode(path: str):
     """offline-train a model from data provided in `path`"""
 
     dataset = CDDataset.from_file(path)
     train_data, test_data = random_split(dataset, [.95, .05])
-    model = Model().to('cuda')
+    model = Model().to(DEVICE)
     optimizer = create_optimizer(model)
 
     step = 1
@@ -157,23 +143,21 @@ def train_mode(path: str):
     while True:
         step = epoch(model, optimizer, train_data, writer, step)
         validate(model, test_data, writer, step)
-        writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=step)
+        writer.add_histogram('proof/distribution', predict(model, list(STEPS), GOAL), global_step=step)
 
 def learn_mode():
     """online-learning 'reinforcement' mode"""
 
-    model = Model().to('cuda')
+    model = Model().to(DEVICE)
     optimizer = create_optimizer(model)
     writer = SummaryWriter()
     experience = []
-    save = []
 
     def save_on_exit():
-        print(f'saving {len(save)} data to save.jsonl.gz...')
-        with gzip.open('save.jsonl.gz', 'w') as f:
-            for line in save:
-                f.write(line.encode('ascii'))
-                f.write(b'\n')
+        print(f"saving {len(experience)} data to experience.gz...")
+        with gzip.open('experience.gz', 'wt') as f:
+            for datum in experience:
+                f.write(f'{repr(datum.formula)} {repr(datum.target)} {float(datum.train.y)}\n')
     atexit.register(save_on_exit)
 
     environment = Environment(AXIOMS, GOAL)
@@ -182,29 +166,30 @@ def learn_mode():
     total_batches = 0
 
     while True:
-        for _ in range(EPISODES_PER_EPOCH):
-            environment.run()
-            total_episodes += 1
+        environment.run()
+        total_episodes += 1
 
-            progress = sum(entry.formula in STEPS for entry in environment.active)
-            writer.add_scalar('proof/progress', progress, global_step=total_episodes)
+        progress = sum(entry.formula in STEPS for entry in environment.active)
+        writer.add_scalar('proof/progress', progress, global_step=total_episodes)
 
-            for _ in range(SAMPLES_PER_EPISODE // 2):
-                target, positive, negative = environment.sample()
-                for y, sample in (1.0, positive), (0.0, negative):
-                    graph = Graph(sample, target)
-                    graph.y = y
-                    experience.append(graph.torch())
-                    save.append(json.dumps(graph.__dict__, default=list))
+        for _ in range(SAMPLES_PER_EPISODE // 2):
+            target, positive, negative = environment.sample()
+            for y, formula in (1.0, positive), (0.0, negative):
+                experience.append(Experience(
+                    formula,
+                    target,
+                    Train(
+                        Input(*encode_formula(formula), *encode_formula(target)),
+                        torch.tensor(y)
+                    )
+                ))
 
         random.shuffle(experience)
-        random.shuffle(save)
         del experience[EXPERIENCE_BUFFER_LIMIT:]
-        del save[EXPERIENCE_BUFFER_LIMIT:]
 
         dataset = CDDataset(experience)
         total_batches = epoch(model, optimizer, dataset, writer, total_batches)
-        writer.add_histogram('proof/distribution', model.predict(DEDUCTION, GOAL), global_step=total_batches)
+        writer.add_histogram('proof/distribution', predict(model, list(STEPS), GOAL), global_step=total_batches)
         environment.model = model
 
 
@@ -215,8 +200,6 @@ if __name__ == '__main__':
     import sys
     if sys.argv[1] == 'baseline':
         baseline_mode()
-    elif sys.argv[1] == 'generate':
-        generate_mode()
     elif sys.argv[1] == 'train':
         train_mode(sys.argv[2])
     elif sys.argv[1] == 'learn':

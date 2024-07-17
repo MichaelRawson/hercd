@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Generator, Optional, Union
+from typing import Optional, Union
 
 from .constants import CACHE_SIZE, TERM_SIZE_LIMIT
 
@@ -96,6 +96,9 @@ def c(left: F, right: F) -> C:
     """create a C with an LRU cache"""
     return C(left, right)
 
+def from_repr(repr: str) -> F:
+    """eval() a string into a formula"""
+    return eval(repr, {}, {'n': n, 'c': c})
 
 def size(f: F) -> int:
     """tree size of a formula"""

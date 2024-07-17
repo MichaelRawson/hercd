@@ -1,100 +1,73 @@
+from typing import NamedTuple
+
 import torch
 from torch import Tensor
-from torch.nn.functional import relu_
-from torch.nn import Embedding, Linear, Module, ModuleList
-from torch_geometric.data import Batch, Data
-from torch_geometric.nn import InstanceNorm, MessagePassing, global_max_pool
+from torch.nn import Dropout, Embedding, Linear, Module
+import torch.nn.functional as F
 
-from .cd import F, Entry
-from .graph import Node, Graph
+from .constants import TERM_SIZE_LIMIT, WORD_EMBEDDING, HIDDEN_LAYER, DROPOUT
 
-CHANNELS = 64
-GIN_HIDDEN = 256
-CONVOLUTIONS = 8
-HIDDEN = 1024
+class Input(NamedTuple):
+    """input for the model"""
 
-class Summation(MessagePassing):
-    """just sum neighbours"""
+    formula_words: Tensor
+    """formula word tensor"""
+    formula_positions: Tensor
+    """formula position tensor"""
+    target_words: Tensor
+    """target word tensor"""
+    target_positions: Tensor
+    """target position tensor"""
 
-    def __init__(self, out: bool):
-        flow = 'source_to_target' if out else 'target_to_source'
-        super().__init__(flow=flow)
 
-    def forward(self, x: Tensor, edge_index: Tensor) -> Tensor:
-        return self.propagate(edge_index, x=x)
+class FormulaEmbedding(Module):
+    """embed a formula"""
 
-    def message(self, x_j: Tensor) -> Tensor:
-        return x_j
+    embedding: Embedding
+    """embed words"""
+    mask: Tensor
+    """a constant: all powers of 2 up to 2^WORD_EMBEDDING"""
 
-class DirectedGINConv(Module):
-    """directed version of the Graph Isomorphism Network"""
+    def __init__(self):
+        super().__init__()
+        self.embedding = Embedding(TERM_SIZE_LIMIT, WORD_EMBEDDING, padding_idx=0)
+        self.register_buffer('mask', 2 ** torch.arange(WORD_EMBEDDING), persistent=False)
 
-    out: Summation
-    """outwards summation before pass through MLP"""
-    back: Summation
-    """backwards summation before pass through MLP"""
+    def forward(self, words: Tensor, positions: Tensor) -> Tensor:
+        words = self.embedding(words)
+        # https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
+        positions = positions.unsqueeze(-1).bitwise_and(self.mask).ne(0).long()
+        x = words + positions
+        return x.sum(dim=1)
+
+
+class Model(Module):
+    """the main model"""
+
+    formula_embedding: FormulaEmbedding
+    """embedding for the formula"""
+    target_embedding: FormulaEmbedding
+    """embedding for the target"""
     hidden: Linear
-    """hiden layer"""
+    """hidden layer"""
+    dropout: Dropout
+    """dropout"""
     output: Linear
     """output layer"""
 
     def __init__(self):
         super().__init__()
-        self.out = Summation(True)
-        self.back = Summation(False)
-        self.hidden = Linear(2 * CHANNELS, GIN_HIDDEN)
-        self.output = Linear(GIN_HIDDEN, CHANNELS)
+        self.formula_embedding = FormulaEmbedding()
+        self.target_embedding = FormulaEmbedding()
+        self.hidden = Linear(2 * WORD_EMBEDDING, HIDDEN_LAYER)
+        self.dropout = Dropout(DROPOUT)
+        self.output = Linear(HIDDEN_LAYER, 1)
 
-    def forward(self, x, edge_index) -> Tensor:
-        out = self.out(x, edge_index)
-        back = self.back(x, edge_index)
-        x = torch.cat((out, back), dim=-1)
+    def forward(self, input: Input) -> Tensor:
+        formula = self.formula_embedding(input.formula_words, input.formula_positions)
+        target = self.target_embedding(input.target_words, input.target_positions)
+        x = torch.cat((formula, target), dim=1)
         x = self.hidden(x)
-        x = relu_(x)
-        return self.output(x)
-
-class Model(Module):
-    """classification of graphs"""
-
-    embedding: Embedding
-    """node embedding"""
-    bn: ModuleList
-    """batch normalisation layers"""
-    conv: ModuleList
-    """graph convolutional layers"""
-    hidden: Linear
-    """hidden layer"""
-    output: Linear
-
-    def __init__(self):
-        super().__init__()
-        self.embedding = Embedding(Node.END, CHANNELS)
-        self.conv = ModuleList([
-            DirectedGINConv()
-            for _ in range(CONVOLUTIONS)
-        ])
-        self.norm = ModuleList([
-            InstanceNorm(CHANNELS)
-            for _ in range(CONVOLUTIONS)
-        ])
-        self.hidden = Linear((CONVOLUTIONS + 1) * CHANNELS, HIDDEN)
-        self.output = Linear(HIDDEN, 1)
-
-    def forward(self, graph: Data) -> Tensor:
-        x = graph.x
-        edge_index = graph.edge_index
-        batch = graph.batch
-        x = self.embedding(x)
-        xs = [x]
-        for conv, norm in zip(self.conv, self.norm):
-            x = relu_(x + norm(conv(x, edge_index)))
-            xs.append(x)
-        xs = torch.cat(xs, dim=1)
-        x = global_max_pool(xs, batch)
-        x = relu_(self.hidden(x))
+        x = self.dropout(x)
+        x = F.relu(x)
         return self.output(x).view(-1)
-
-    def predict(self, entries: list[Entry], goal: F) -> Tensor:
-        graphs = [Graph(entry, goal).torch() for entry in entries]
-        batch = Batch.from_data_list(graphs).to('cuda')
-        return self(batch)

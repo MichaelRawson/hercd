@@ -4,6 +4,7 @@ from typing import Optional
 from .cd import C, Entry, F, TooBig, NoUnifier, match, modus_ponens, n_simplify
 from .constants import FACT_LIMIT, EPSILON
 from .model import Model
+from .train import predict
 
 class Environment:
     """an environment for CD proofs"""
@@ -43,18 +44,20 @@ class Environment:
         while len(self.active) < FACT_LIMIT:
             self._activate(self._select())
 
-    def sample(self) -> tuple[F, Entry, Entry]:
+    def sample(self) -> tuple[F, F, F]:
         """sample a hindsight goal and one positive/negative example"""
 
         while True:
             target = random.choice(self.passive)
 
             # positive examples are the ancestors of `target`
-            positive = target.ancestors
-
+            positive = [
+                entry.formula
+                for entry in target.ancestors
+            ]
             # negatives are the rest
             negative = [
-                entry
+                entry.formula
                 for entry in self.active
                 if entry.formula not in positive
             ]
@@ -63,7 +66,7 @@ class Environment:
             if not positive or not negative:
                 continue
 
-            positive = random.choice(list(positive))
+            positive = random.choice(positive)
             negative = random.choice(negative)
             return target.formula, positive, negative
 
@@ -145,6 +148,7 @@ class Environment:
         """add `new` to `self.passive`"""
 
         if new and self.model is not None:
-            for entry, score in zip(new, self.model.predict(new, self.goal).tolist()):
+            formulas = [entry.formula for entry in new]
+            for entry, score in zip(new, predict(self.model, formulas, self.goal).tolist()):
                 entry.score = score
         self.passive.extend(new)
