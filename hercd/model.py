@@ -2,7 +2,7 @@ from typing import NamedTuple
 
 import torch
 from torch import Tensor
-from torch.nn import Dropout, Embedding, Linear, Module
+from torch.nn import Dropout, Embedding, Linear, Module, TransformerEncoderLayer
 import torch.nn.functional as F
 
 from .constants import TERM_SIZE_LIMIT, WORD_EMBEDDING, HIDDEN_LAYER, DROPOUT
@@ -25,19 +25,23 @@ class FormulaEmbedding(Module):
 
     embedding: Embedding
     """embed words"""
-    mask: Tensor
+    transformer: TransformerEncoderLayer
+    """attention"""
+    MASK: Tensor
     """a constant: all powers of 2 up to 2^WORD_EMBEDDING"""
 
     def __init__(self):
         super().__init__()
         self.embedding = Embedding(TERM_SIZE_LIMIT, WORD_EMBEDDING, padding_idx=0)
-        self.register_buffer('mask', 2 ** torch.arange(WORD_EMBEDDING), persistent=False)
+        self.attention = TransformerEncoderLayer(WORD_EMBEDDING, 1, dim_feedforward=HIDDEN_LAYER)
+        self.register_buffer('MASK', 2 ** torch.arange(WORD_EMBEDDING), persistent=False)
 
     def forward(self, words: Tensor, positions: Tensor) -> Tensor:
         words = self.embedding(words)
         # https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
-        positions = positions.unsqueeze(-1).bitwise_and(self.mask).ne(0).long()
+        positions = positions.unsqueeze(-1).bitwise_and(self.MASK).ne(0).long()
         x = words + positions
+        x = self.attention(x)
         return x.sum(dim=1)
 
 

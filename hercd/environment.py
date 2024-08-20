@@ -1,3 +1,4 @@
+from bisect import insort
 import random
 from typing import Optional
 
@@ -15,18 +16,18 @@ class Environment:
     """problem goal"""
     model: Optional[Model]
     """embedding network for policy - if None, apply a uniform policy"""
-    chatty: bool
-    """whether to output progress or not"""
     active: list[Entry]
     """the active set"""
     passive: list[Entry]
     """the passive set"""
+    steps: set[F]
+    """the steps required for the proof: used for monitoring, take care not to cheat!"""
 
-    def __init__(self, axioms: list[Entry], goal: F):
+    def __init__(self, axioms: list[Entry], goal: F, steps: set[F]):
         self.axioms = axioms
         self.goal = goal
+        self.steps = steps
         self.model = None
-        self.chatty = False
         self.reset()
 
     def reset(self):
@@ -72,14 +73,7 @@ class Environment:
 
     def _select(self) -> Entry:
         """choose an entry from `self.passive`"""
-
-        length = len(self.passive)
-        if self.model is None or random.random() < EPSILON:
-            index = random.randrange(length)
-        else:
-            index = max(range(length), key=lambda n: self.passive[n].score)
-
-        return self.passive.pop(index)
+        return self.passive.pop()
 
     def _activate(self, given: Entry):
         """activate `given`"""
@@ -110,8 +104,7 @@ class Environment:
 
         # we've committed to `given` now
         self.active.append(given)
-        if self.chatty:
-            print(len(self.active), given.formula)
+        print(f"{len(self.active)}{'*' if given.formula in self.steps else ''}\t{given.formula}")
 
         # do inference
         unprocessed = []
@@ -137,6 +130,11 @@ class Environment:
                     unprocessed.append(Entry(new, major, minor))
         self._add_to_passive(unprocessed)
 
+        for distance, passive in enumerate(reversed(self.passive)):
+            if passive.formula in self.steps:
+                print(f"{distance} from {passive.formula}")
+                break
+
     def _retain(self, new: F) -> bool:
         """check whether `new` should be retained"""
 
@@ -151,4 +149,4 @@ class Environment:
             formulas = [entry.formula for entry in new]
             for entry, score in zip(new, predict(self.model, formulas, self.goal).tolist()):
                 entry.score = score
-        self.passive.extend(new)
+                insort(self.passive, entry, key=lambda entry: entry.score)

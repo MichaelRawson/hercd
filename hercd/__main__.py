@@ -119,7 +119,7 @@ STEPS: set[F] = {entry.formula for entry in DEDUCTION}
 def baseline_mode():
     """uniform-policy mode"""
 
-    environment = Environment(AXIOMS, GOAL)
+    environment = Environment(AXIOMS, GOAL, STEPS)
     environment.chatty = True
     writer = SummaryWriter()
     total_episodes = 0
@@ -160,7 +160,8 @@ def learn_mode():
                 f.write(f'{repr(datum.formula)} {repr(datum.target)} {float(datum.train.y)}\n')
     atexit.register(save_on_exit)
 
-    environment = Environment(AXIOMS, GOAL)
+    environment = Environment(AXIOMS, GOAL, STEPS)
+    environment.model = model
     environment.chatty = True
     total_episodes = 0
     total_batches = 0
@@ -190,7 +191,6 @@ def learn_mode():
         dataset = CDDataset(experience)
         total_batches = epoch(model, optimizer, dataset, writer, total_batches)
         writer.add_histogram('proof/distribution', predict(model, list(STEPS), GOAL), global_step=total_batches)
-        environment.model = model
 
 
 if __name__ == '__main__':

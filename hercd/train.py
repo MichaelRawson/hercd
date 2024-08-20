@@ -4,7 +4,7 @@ from typing import NamedTuple
 
 import torch
 from torch import Tensor
-from torch.nn.functional import binary_cross_entropy_with_logits
+from torch.nn.functional import binary_cross_entropy_with_logits, sigmoid
 from torch.utils.data import Dataset, DataLoader, default_collate
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.optim import Optimizer, Adam
